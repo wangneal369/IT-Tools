@@ -1,0 +1,87 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  fast-gate:
+    name: Fast gate (fmt + clippy + tests + zero-GPUI + deny)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux non-GTK system dependencies (Vulkan / Wayland / XCB)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libxkbcommon-dev libxkbcommon-x11-dev libx11-dev libxcb1-dev \
+            libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
+            libxcb-randr0-dev libxcb-cursor-dev libwayland-dev \
+            libvulkan-dev libasound2-dev pkg-config
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.95"
+          components: clippy, rustfmt
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Format check
+        run: cargo fmt --all -- --check
+
+      - name: Clippy (deny warnings)
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Unit tests (non-UI crates)
+        run: cargo test -p devtools-core -p devtools-detect -p devtools-tools -p devtools-search -p devtools-platform
+
+      - name: Enforce zero GPUI dependencies in non-UI crates
+        run: |
+          if cargo tree -p devtools-core -p devtools-detect -p devtools-tools -p devtools-search -p devtools-platform | grep -i gpui; then
+            echo "ERROR: GPUI dependency leaked into non-UI workspace crate"
+            exit 1
+          fi
+
+      - name: Cargo deny (advisories, bans, licenses, sources)
+        uses: EmbarkStudios/cargo-deny-action@v2
+
+  build-matrix:
+    name: Native build & core tests (${{ matrix.os }})
+    needs: fast-gate
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-24.04]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux non-GTK system dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libxkbcommon-dev libxkbcommon-x11-dev libx11-dev libxcb1-dev \
+            libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
+            libxcb-randr0-dev libxcb-cursor-dev libwayland-dev \
+            libvulkan-dev libasound2-dev pkg-config
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.95"
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build workspace
+        run: cargo build --workspace --locked
+
+      - name: Run non-UI unit tests natively (including atomic Windows config I/O)
+        run: cargo test --locked -p devtools-core -p devtools-detect -p devtools-tools -p devtools-search -p devtools-platform
