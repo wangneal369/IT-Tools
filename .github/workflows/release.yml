@@ -1,0 +1,259 @@
+name: Release
+
+# 三端 Release 打包、体积红线与 Windows Release LTO `serde_json_path` 验活。
+# 触发：推送 `v*` tag（产出 GitHub Release）或手动 workflow_dispatch（仅产物）。
+# 签名与安装器槽位：Windows 证书、macOS Developer ID + notarytool 未接入，
+# 当前 Windows 产出便携 `.zip`，macOS 产出 ad-hoc 签名的 `.app` + `.dmg`。
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_TOOLCHAIN: "1.98"
+  # V1 体积红线：未压缩二进制 ≤ 45 MiB，压缩分发包 ≤ 22 MiB。
+  MAX_BINARY_BYTES: 47185920
+  MAX_ARCHIVE_BYTES: 23068672
+
+jobs:
+  package:
+    name: Release package (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            artifact: devtools-windows-x86_64
+          - os: macos-latest
+            artifact: devtools-macos-aarch64
+          - os: ubuntu-24.04
+            artifact: devtools-linux-x86_64
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux non-GTK system dependencies (Vulkan / Wayland / XCB)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libxkbcommon-dev libxkbcommon-x11-dev libx11-dev libxcb1-dev \
+            libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
+            libxcb-randr0-dev libxcb-cursor-dev libwayland-dev \
+            libvulkan-dev libfontconfig1-dev libfreetype-dev libasound2-dev pkg-config
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.98"
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Resolve app version
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+            echo "APP_VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+          else
+            echo "APP_VERSION=0.1.0" >> "$GITHUB_ENV"
+          fi
+
+      # Windows MSVC + thin LTO + codegen-units=1 + strip=symbols 下，
+      # serde_json_path 的 5 个内置函数依赖 inventory 静态注册；本测试在
+      # 真实 Release Profile 下逐项验活，三端矩阵同时复验。
+      - name: Release LTO JSONPath verification (`serde_json_path` inventory)
+        run: cargo test --release --locked -p devtools-tools --test release_lto_jsonpath
+
+      - name: Build release app
+        run: cargo build --release --locked -p devtools-app
+
+      # ---------- Windows: 便携 .zip ----------
+      - name: Package Windows portable zip
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $bin = 'target/release/devtools.exe'
+          $size = (Get-Item $bin).Length
+          if ($size -gt [long]$env:MAX_BINARY_BYTES) {
+            throw "Binary size $size exceeds $env:MAX_BINARY_BYTES bytes"
+          }
+          $dir = 'dist/DevTools-windows-x86_64'
+          New-Item -ItemType Directory -Force -Path $dir | Out-Null
+          Copy-Item $bin "$dir/devtools.exe"
+          Copy-Item README.md "$dir/README.md" -ErrorAction SilentlyContinue
+          $zip = "dist/DevTools-$env:APP_VERSION-windows-x86_64.zip"
+          Compress-Archive -Path $dir -DestinationPath $zip -Force
+          $zipSize = (Get-Item $zip).Length
+          if ($zipSize -gt [long]$env:MAX_ARCHIVE_BYTES) {
+            throw "Archive size $zipSize exceeds $env:MAX_ARCHIVE_BYTES bytes"
+          }
+          Remove-Item -Recurse -Force $dir
+          "WINDOWS_BINARY_BYTES=$size" >> $env:GITHUB_ENV
+          "WINDOWS_ZIP_BYTES=$zipSize" >> $env:GITHUB_ENV
+
+      # ---------- macOS: .app 骨架 + ad-hoc 签名 + .tar.gz / .dmg ----------
+      - name: Package macOS app bundle
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP="dist/DevTools.app"
+          mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+          cp target/release/devtools "$APP/Contents/MacOS/devtools"
+          cat > "$APP/Contents/Info.plist" <<'PLIST'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>CFBundleIdentifier</key><string>io.github.wangneal369.devtools</string>
+            <key>CFBundleName</key><string>DevTools</string>
+            <key>CFBundleDisplayName</key><string>DevTools</string>
+            <key>CFBundleExecutable</key><string>devtools</string>
+            <key>CFBundlePackageType</key><string>APPL</string>
+            <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
+            <key>CFBundleShortVersionString</key><string>__APP_VERSION__</string>
+            <key>CFBundleVersion</key><string>__APP_VERSION__</string>
+            <key>LSMinimumSystemVersion</key><string>14.0</string>
+            <!-- V1: 常驻后台但可在 Dock 显示，由运行时三态控制。 -->
+            <key>LSUIElement</key><false/>
+          </dict>
+          </plist>
+          PLIST
+          sed -i '' "s/__APP_VERSION__/$APP_VERSION/g" "$APP/Contents/Info.plist"
+          # 无 Developer ID 证书时 ad-hoc 签名；接入证书后替换为正式签名 + notarytool。
+          codesign --force --deep --sign - "$APP"
+          BIN_SIZE=$(stat -f%z "$APP/Contents/MacOS/devtools")
+          if [ "$BIN_SIZE" -gt "$MAX_BINARY_BYTES" ]; then
+            echo "Binary size $BIN_SIZE exceeds $MAX_BINARY_BYTES bytes" >&2
+            exit 1
+          fi
+          tar -C dist -czf "dist/DevTools-$APP_VERSION-macos-aarch64.tar.gz" DevTools.app
+          mkdir -p dist/dmgroot
+          cp -R "$APP" dist/dmgroot/
+          hdiutil create -volname "DevTools" -srcfolder dist/dmgroot \
+            -ov -format UDZO "dist/DevTools-$APP_VERSION-macos-aarch64.dmg"
+          for f in "dist/DevTools-$APP_VERSION-macos-aarch64.tar.gz" \
+                   "dist/DevTools-$APP_VERSION-macos-aarch64.dmg"; do
+            SIZE=$(stat -f%z "$f")
+            if [ "$SIZE" -gt "$MAX_ARCHIVE_BYTES" ]; then
+              echo "Archive $f size $SIZE exceeds $MAX_ARCHIVE_BYTES bytes" >&2
+              exit 1
+            fi
+          done
+          rm -rf dist/dmgroot "$APP"
+          echo "MACOS_BINARY_BYTES=$BIN_SIZE" >> "$GITHUB_ENV"
+
+      # ---------- Linux: .tar.gz + .desktop + 图标 ----------
+      - name: Package Linux tarball
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          BIN_SIZE=$(stat -c%s target/release/devtools)
+          if [ "$BIN_SIZE" -gt "$MAX_BINARY_BYTES" ]; then
+            echo "Binary size $BIN_SIZE exceeds $MAX_BINARY_BYTES bytes" >&2
+            exit 1
+          fi
+          ROOT="dist/DevTools-linux-x86_64"
+          mkdir -p "$ROOT"
+          cp target/release/devtools "$ROOT/devtools"
+          cat > "$ROOT/io.github.wangneal369.devtools.desktop" <<'DESKTOP'
+          [Desktop Entry]
+          Type=Application
+          Name=DevTools
+          Comment=Offline developer toolbox
+          Exec=devtools
+          Icon=io.github.wangneal369.devtools
+          Terminal=false
+          Categories=Development;Utility;
+          StartupNotify=false
+          DESKTOP
+          cat > "$ROOT/io.github.wangneal369.devtools.svg" <<'SVG'
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+            <rect width="64" height="64" rx="12" fill="#1f2328"/>
+            <path d="M20 22l-8 10 8 10M44 22l8 10-8 10M37 16l-10 32"
+                  fill="none" stroke="#e6edf3" stroke-width="5"
+                  stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          SVG
+          cat > "$ROOT/install.sh" <<'INSTALL'
+          #!/usr/bin/env sh
+          # 安装到 ~/.local：二进制、桌面项与图标。
+          set -eu
+          PREFIX="${PREFIX:-$HOME/.local}"
+          HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+          install -Dm755 "$HERE/devtools" "$PREFIX/bin/devtools"
+          install -Dm644 "$HERE/io.github.wangneal369.devtools.desktop" \
+            "$PREFIX/share/applications/io.github.wangneal369.devtools.desktop"
+          install -Dm644 "$HERE/io.github.wangneal369.devtools.svg" \
+            "$PREFIX/share/icons/hicolor/scalable/apps/io.github.wangneal369.devtools.svg"
+          echo "Installed DevTools into $PREFIX"
+          INSTALL
+          chmod +x "$ROOT/install.sh"
+          tar -C dist -czf "dist/DevTools-$APP_VERSION-linux-x86_64.tar.gz" DevTools-linux-x86_64
+          TAR_SIZE=$(stat -c%s "dist/DevTools-$APP_VERSION-linux-x86_64.tar.gz")
+          if [ "$TAR_SIZE" -gt "$MAX_ARCHIVE_BYTES" ]; then
+            echo "Archive size $TAR_SIZE exceeds $MAX_ARCHIVE_BYTES bytes" >&2
+            exit 1
+          fi
+          rm -rf "$ROOT"
+          echo "LINUX_BINARY_BYTES=$BIN_SIZE" >> "$GITHUB_ENV"
+
+      - name: Report measured sizes
+        shell: bash
+        run: |
+          echo "Artifacts for ${{ matrix.artifact }}:" > size-report.txt
+          ls -l dist
+          for f in dist/DevTools-*; do
+            [ -f "$f" ] && echo "$(basename "$f") $(stat -c%s "$f" 2>/dev/null || stat -f%z "$f") bytes" >> size-report.txt
+          done
+          cat size-report.txt
+
+      - name: Upload workflow artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: |
+            dist/DevTools-*
+            size-report.txt
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: package
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Generate SHA256SUMS.txt
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd dist
+          sha256sum DevTools-* | tee SHA256SUMS.txt
+
+      - name: Create or update release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="$GITHUB_REF_NAME"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/DevTools-* dist/SHA256SUMS.txt --clobber
+          else
+            gh release create "$TAG" dist/DevTools-* dist/SHA256SUMS.txt \
+              --title "DevTools $TAG" --generate-notes
+          fi
