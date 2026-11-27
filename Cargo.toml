@@ -31,6 +31,7 @@ url = "2.5.9"
 croner = { version = "5.0", default-features = false, features = ["std", "jiff"] }
 csscolorparser = "0.9"
 nucleo-matcher = "0.3"
+arboard = { version = "3.7", default-features = false }
 
 # M2 OS integration layer (all zero-GPUI / zero-tokio).
 async-channel = "2"

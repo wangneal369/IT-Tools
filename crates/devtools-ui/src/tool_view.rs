@@ -15,11 +15,14 @@ use crate::theme::Palette;
 use crate::workspace::{TabInstanceId, Workbench};
 
 /// Identity of one tool view instance.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone)]
 pub struct ToolViewContext {
     pub tool_id: ToolId,
     pub instance: u32,
     pub tab_id: TabInstanceId,
+    /// Shared memory-only session. Observe it to receive subsequent injections;
+    /// publish edits/output here so anti-overwrite and relay see current state.
+    pub session: Entity<crate::workspace::ToolSession>,
 }
 
 /// Factory contract implemented by M4 tool views.
@@ -56,10 +59,14 @@ impl ToolViewRegistry {
         match self.overrides.get(&context.tool_id) {
             Some(factory) => factory.create(context, workbench, cx),
             None => cx
-                .new(|_| PlaceholderToolView {
-                    context,
-                    workbench,
-                    split: SplitMode::SideBySide,
+                .new(|cx| {
+                    let subscription = cx.observe(&context.session, |_, _, cx| cx.notify());
+                    PlaceholderToolView {
+                        context,
+                        workbench,
+                        split: SplitMode::SideBySide,
+                        _session_subscription: subscription,
+                    }
                 })
                 .into(),
         }
@@ -88,6 +95,7 @@ pub struct PlaceholderToolView {
     context: ToolViewContext,
     workbench: WeakEntity<Workbench>,
     split: SplitMode,
+    _session_subscription: Subscription,
 }
 
 impl Render for PlaceholderToolView {
@@ -200,9 +208,10 @@ impl Render for PlaceholderToolView {
                     .text_xs()
                     .bg(rgb(palette.panel_alt))
                     .text_color(rgb(palette.muted))
-                    .child("发送到 ▸（M3）")
+                    .cursor_pointer()
+                    .child("发送到 ▸")
                     .on_click(move |_, _, cx| {
-                        wb.update(cx, |state, cx| state.set_status("工具接力将在 M3 接入", cx));
+                        wb.update(cx, |state, cx| state.open_relay(TabInstanceId(tab_key), cx));
                     }),
             );
         }
@@ -218,10 +227,10 @@ impl Render for PlaceholderToolView {
                     .cursor_pointer()
                     .bg(rgb(palette.accent))
                     .text_color(rgb(0xffffff))
-                    .child("复制并收起（M4）")
+                    .child("复制并收起")
                     .on_click(move |_, _, cx| {
                         wb.update(cx, |state, cx| {
-                            state.set_status("M2 壳层占位：工具输出将在 M4 接入", cx)
+                            state.copy_output(TabInstanceId(tab_key), true, cx)
                         });
                     }),
             );
@@ -265,44 +274,59 @@ impl Render for PlaceholderToolView {
             )
             .child(header_actions);
 
+        let session = self.context.session.read(cx);
+        let input_preview = session
+            .input
+            .as_ref()
+            .map(payload_preview)
+            .unwrap_or_else(|| "等待输入或智能粘贴".into());
+        let output_preview = session
+            .output
+            .as_ref()
+            .map(payload_preview)
+            .unwrap_or_else(|| "工具计算内核将在 M4 接入".into());
         let body = match split {
-            SplitMode::Single => {
-                div()
-                    .flex_1()
-                    .p_3()
-                    .child(single_pane(palette, "输入 / 输出", font_size))
-            }
+            SplitMode::Single => div().flex_1().p_3().child(single_pane(
+                palette,
+                "输入 / 输出",
+                font_size,
+                input_preview.clone(),
+            )),
             SplitMode::SideBySide => div()
                 .flex_1()
                 .flex()
                 .gap_2()
                 .p_3()
-                .child(
-                    div()
-                        .flex_1()
-                        .child(single_pane(palette, "输入", font_size)),
-                )
-                .child(
-                    div()
-                        .flex_1()
-                        .child(single_pane(palette, "输出", font_size)),
-                ),
+                .child(div().flex_1().child(single_pane(
+                    palette,
+                    "输入",
+                    font_size,
+                    input_preview.clone(),
+                )))
+                .child(div().flex_1().child(single_pane(
+                    palette,
+                    "输出",
+                    font_size,
+                    output_preview.clone(),
+                ))),
             SplitMode::Stacked => div()
                 .flex_1()
                 .flex()
                 .flex_col()
                 .gap_2()
                 .p_3()
-                .child(
-                    div()
-                        .flex_1()
-                        .child(single_pane(palette, "输入", font_size)),
-                )
-                .child(
-                    div()
-                        .flex_1()
-                        .child(single_pane(palette, "输出", font_size)),
-                ),
+                .child(div().flex_1().child(single_pane(
+                    palette,
+                    "输入",
+                    font_size,
+                    input_preview.clone(),
+                )))
+                .child(div().flex_1().child(single_pane(
+                    palette,
+                    "输出",
+                    font_size,
+                    output_preview.clone(),
+                ))),
         };
 
         div()
@@ -317,7 +341,12 @@ impl Render for PlaceholderToolView {
     }
 }
 
-fn single_pane(palette: Palette, label: &'static str, font_size: f32) -> impl IntoElement {
+fn single_pane(
+    palette: Palette,
+    label: &'static str,
+    font_size: f32,
+    preview: String,
+) -> impl IntoElement {
     div()
         .size_full()
         .flex()
@@ -334,6 +363,16 @@ fn single_pane(palette: Palette, label: &'static str, font_size: f32) -> impl In
                 .flex_1()
                 .text_size(px(font_size))
                 .text_color(rgb(palette.muted))
-                .child("此处为 M4 工具视图预留区域。M2 只交付壳层、实例会话与生命周期。"),
+                .child(preview),
         )
+}
+
+fn payload_preview(payload: &devtools_core::RawPayload) -> String {
+    match payload {
+        devtools_core::RawPayload::Text(text) => text.chars().take(4096).collect(),
+        devtools_core::RawPayload::Files(paths) => format!("{} 个文件", paths.len()),
+        devtools_core::RawPayload::Image(image) => {
+            format!("图片 {} × {}", image.width, image.height)
+        }
+    }
 }

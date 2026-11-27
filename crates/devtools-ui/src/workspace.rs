@@ -50,6 +50,32 @@ pub enum TabKind {
 pub struct TabEntry {
     pub id: TabInstanceId,
     pub kind: TabKind,
+    /// Authoritative memory-only input and output; factories observe this entity.
+    pub session: Entity<ToolSession>,
+}
+
+#[derive(Default)]
+pub struct ToolSession {
+    pub launch_input: Option<devtools_core::ToolLaunchInput>,
+    pub input: Option<devtools_core::RawPayload>,
+    pub output: Option<devtools_core::RawPayload>,
+    pub sensitive_output: bool,
+}
+
+impl ToolSession {
+    pub fn accepts(&self, payload: &devtools_core::RawPayload) -> bool {
+        self.input
+            .as_ref()
+            .is_none_or(|input| payload_empty(input) || input == payload)
+    }
+}
+
+fn payload_empty(payload: &devtools_core::RawPayload) -> bool {
+    match payload {
+        devtools_core::RawPayload::Text(text) => text.is_empty(),
+        devtools_core::RawPayload::Files(files) => files.is_empty(),
+        devtools_core::RawPayload::Image(image) => image.bytes.is_empty(),
+    }
 }
 
 impl TabEntry {
@@ -141,6 +167,12 @@ pub struct Workbench {
     pub(crate) pending_wake: Option<PendingWake>,
     pub(crate) registry: ToolViewRegistry,
     pub(crate) status_line: String,
+    pub(crate) smart: crate::smart::SmartState,
+    pub(crate) palette_open: bool,
+    pub(crate) palette_query: String,
+    pub(crate) palette_selected: usize,
+    pub(crate) palette_epoch: u64,
+    pub(crate) relay: Option<crate::smart::RelayState>,
     /// Kept alive for the process lifetime so the app-level key interceptor
     /// (`Ctrl/Cmd+W`, `Esc`) stays registered.
     pub(crate) key_interceptor: Option<Subscription>,
@@ -160,7 +192,7 @@ impl Workbench {
             platform,
         } = init;
 
-        let entity = cx.new(|_| Self {
+        let entity = cx.new(|cx| Self {
             store,
             settings,
             settings_notice,
@@ -170,6 +202,7 @@ impl Workbench {
             tabs: vec![TabEntry {
                 id: TabInstanceId(0),
                 kind: TabKind::Home,
+                session: cx.new(|_| ToolSession::default()),
             }],
             active: 0,
             next_tab_id: 1,
@@ -185,6 +218,12 @@ impl Workbench {
             pending_wake: None,
             registry: ToolViewRegistry::new(),
             status_line: "就绪".to_owned(),
+            smart: crate::smart::SmartState::default(),
+            palette_open: false,
+            palette_query: String::new(),
+            palette_selected: 0,
+            palette_epoch: 0,
+            relay: None,
             key_interceptor: None,
             last_geometry_persist: None,
             torn_down: false,
@@ -282,15 +321,31 @@ impl Workbench {
     /// Open a fresh instance of `tool`; the same tool may be open many times
     /// with monotonically increasing instance numbers (`#1`, `#2`, ...).
     pub fn open_tool(&mut self, tool: ToolId, cx: &mut Context<Self>) {
+        self.create_tool(tool, None, cx);
+    }
+
+    pub(crate) fn create_tool(
+        &mut self,
+        tool: ToolId,
+        launch_input: Option<devtools_core::ToolLaunchInput>,
+        cx: &mut Context<Self>,
+    ) {
         let instance = next_instance_number(&mut self.tool_instance_counters, tool);
         let id = TabInstanceId(self.next_tab_id);
         self.next_tab_id += 1;
 
+        let session = cx.new(|_| ToolSession {
+            input: launch_input.as_ref().map(|input| input.payload.clone()),
+            launch_input,
+            sensitive_output: tool.default_capabilities().sensitive_output,
+            ..Default::default()
+        });
         let view = self.registry.create(
             ToolViewContext {
                 tool_id: tool,
                 instance,
                 tab_id: id,
+                session: session.clone(),
             },
             cx.weak_entity(),
             cx,
@@ -298,6 +353,7 @@ impl Workbench {
 
         self.tabs.push(TabEntry {
             id,
+            session,
             kind: TabKind::Tool {
                 tool_id: tool,
                 instance,
@@ -472,6 +528,9 @@ impl Workbench {
 
     pub fn set_smart_detection(&mut self, enabled: bool, cx: &mut Context<Self>) {
         self.settings.smart_detection.enabled = enabled;
+        if !enabled {
+            self.cancel_detection(cx);
+        }
         self.persist_settings();
         cx.notify();
     }
@@ -728,6 +787,8 @@ impl Workbench {
             return;
         }
         self.torn_down = true;
+        self.smart = crate::smart::SmartState::default();
+        self.relay = None;
         self.sleep_timer = None;
         self.pending_wake = None;
         self.persist_window_state_now();
