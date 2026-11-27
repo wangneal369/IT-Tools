@@ -1,0 +1,2464 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>DevTools 主工作台壳层原型</title>
+<style>
+  /* ==========================================================================
+     PROTOTYPE — THROWAWAY ARTIFACT FOR ISSUE #9
+     Calm, orderly, minimalist native desktop workbench (?variant=A|B|C).
+     Supports toggling single-row vs multi-row wrapped tabs.
+     ========================================================================== */
+  *, *::before, *::after { box-sizing: border-box; }
+
+  html, body {
+    margin: 0;
+    padding: 0;
+    font-family: var(--font-sans, "Segoe UI", "Microsoft YaHei UI", -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif);
+    color: var(--foreground, #e5e7eb);
+    font-size: 13px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .ico {
+    width: 14px;
+    height: 14px;
+    display: inline-block;
+    vertical-align: -2px;
+    flex-shrink: 0;
+    stroke: currentColor;
+    fill: none;
+    stroke-width: 1.6;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+  .ico-sm { width: 12.5px; height: 12.5px; vertical-align: -1.5px; }
+
+  .proto-root {
+    width: 100%;
+    max-width: 1240px;
+    margin: 0 auto;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  /* ==========================================================================
+     ORDERLY TOP CONTROL STRIP
+     ========================================================================== */
+  .sim-bar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+  .sim-group {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+  .sim-label {
+    font-size: 11.5px;
+    color: var(--muted-foreground, #8b909a);
+  }
+  .sim-select, .sim-btn {
+    font-family: inherit;
+    font-size: 11.5px;
+    height: 28px;
+    padding: 0 9px;
+    border-radius: 6px;
+    border: 1px solid var(--border, #2b2e36);
+    background: var(--card, #1a1c20);
+    color: var(--foreground, #e5e7eb);
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    white-space: nowrap;
+  }
+  .sim-select:hover, .sim-btn:hover { border-color: var(--muted-foreground, #555b66); }
+  .sim-btn.active {
+    background: var(--secondary, #2a2e38);
+    border-color: var(--muted-foreground, #687080);
+    font-weight: 500;
+  }
+  .sim-seg {
+    display: inline-flex;
+    height: 28px;
+    align-items: center;
+    background: var(--card, #1a1c20);
+    border: 1px solid var(--border, #2b2e36);
+    border-radius: 6px;
+    padding: 2px;
+    gap: 2px;
+  }
+  .sim-seg button {
+    font-family: inherit;
+    font-size: 11px;
+    height: 22px;
+    padding: 0 8px;
+    border: none;
+    border-radius: 4px;
+    background: transparent;
+    color: var(--muted-foreground, #8b909a);
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .sim-seg button:hover { color: var(--foreground, #f3f4f6); }
+  .sim-seg button.active {
+    background: var(--secondary, #2a2e38);
+    color: var(--foreground, #f8fafc);
+    font-weight: 500;
+  }
+
+  /* ==========================================================================
+     WINDOW STAGE
+     ========================================================================== */
+  .window-stage { width: 100%; overflow-x: auto; }
+  .window-frame-holder { margin: 0 auto; transition: width 0.16s ease; }
+  .window-frame-holder[data-size="fluid"] { width: 100%; }
+  .window-frame-holder[data-size="desktop"] { width: 1160px; }
+  .window-frame-holder[data-size="compact"] { width: 820px; }
+
+  /* ==========================================================================
+     NATIVE DEVTOOLS DESKTOP WINDOW (Comfortable Charcoal / Soft Paper)
+     ========================================================================== */
+  .dt-window {
+    /* Soft eye-friendly charcoal dark palette (inspired by Zed / macOS) */
+    --dt-bg: #1c1d21;
+    --dt-chrome: #16171a;
+    --dt-surface: #222429;
+    --dt-hover: #282b31;
+    --dt-active: #2e323a;
+    --dt-border: #2a2d34;
+    --dt-border-strong: #373b44;
+    --dt-fg: #e6e8ec;
+    --dt-fg-muted: #9aa0ab;
+    --dt-fg-subtle: #69707d;
+    --dt-gutter: #505662;
+    /* One calm focal accent (serene macOS native blue, used sparingly) */
+    --dt-accent: #3b7be0;
+    --dt-accent-hover: #4a88ea;
+    --dt-accent-fg: #ffffff;
+    --dt-accent-soft: rgba(59, 123, 224, 0.10);
+    --dt-ok: #4cb782;
+    --dt-warn: #d4a04a;
+    --dt-err: #e06c75;
+    /* Gentle syntax highlight */
+    --syn-key: #9cc4f4;
+    --syn-str: #b3d6a7;
+    --syn-num: #ddb07d;
+    --syn-bool: #c9a8eb;
+    --dt-shadow: 0 12px 32px rgba(0, 0, 0, 0.36);
+    --dt-mono: var(--font-mono, "JetBrains Mono", "Cascadia Code", Consolas, monospace);
+
+    position: relative;
+    height: 540px;
+    background: var(--dt-bg);
+    color: var(--dt-fg);
+    border: 1px solid var(--dt-border-strong);
+    border-radius: 10px;
+    box-shadow: var(--dt-shadow);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    font-size: 12.5px;
+    user-select: none;
+  }
+
+  .dt-window[data-dt-theme="light"] {
+    /* Soft warm paper light palette */
+    --dt-bg: #ffffff;
+    --dt-chrome: #f5f6f8;
+    --dt-surface: #f0f2f5;
+    --dt-hover: #eaedf2;
+    --dt-active: #e2e6ee;
+    --dt-border: #e5e8ee;
+    --dt-border-strong: #d3d8e2;
+    --dt-fg: #1f2328;
+    --dt-fg-muted: #59636e;
+    --dt-fg-subtle: #8c959f;
+    --dt-gutter: #adb5bf;
+    --dt-accent: #2563eb;
+    --dt-accent-hover: #1d4ed8;
+    --dt-accent-fg: #ffffff;
+    --dt-accent-soft: rgba(37, 99, 235, 0.08);
+    --dt-ok: #1a7f37;
+    --dt-warn: #9a6700;
+    --dt-err: #cf222e;
+    --syn-key: #0550ae;
+    --syn-str: #1f6f3d;
+    --syn-num: #953800;
+    --syn-bool: #6639ba;
+    --dt-shadow: 0 10px 28px rgba(15, 23, 42, 0.08);
+  }
+
+  .dt-window button, .dt-window input, .dt-window textarea { font-family: inherit; color: inherit; }
+  .dt-window :focus-visible { outline: 1.5px solid var(--dt-accent); outline-offset: -1px; }
+
+  .dt-btn {
+    height: 27px;
+    padding: 0 10px;
+    border-radius: 6px;
+    border: 1px solid var(--dt-border-strong);
+    background: var(--dt-surface);
+    color: var(--dt-fg);
+    font-size: 12px;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    white-space: nowrap;
+  }
+  .dt-btn:hover:not(:disabled) { background: var(--dt-hover); }
+  .dt-btn:disabled { opacity: 0.38; cursor: default; }
+
+  .dt-btn.primary {
+    background: var(--dt-accent);
+    color: var(--dt-accent-fg);
+    border-color: transparent;
+    font-weight: 500;
+    padding: 0 12px;
+  }
+  .dt-btn.primary:hover:not(:disabled) { background: var(--dt-accent-hover); }
+
+  .dt-btn.ghost {
+    background: transparent;
+    border-color: transparent;
+    color: var(--dt-fg-muted);
+    padding: 0 7px;
+  }
+  .dt-btn.ghost:hover:not(:disabled) { background: var(--dt-hover); color: var(--dt-fg); }
+  .dt-btn.active { background: var(--dt-active); border-color: transparent; color: var(--dt-fg); }
+  .dt-btn.icon-only { width: 27px; padding: 0; justify-content: center; }
+
+  .dt-select {
+    height: 27px;
+    padding: 0 8px;
+    border-radius: 6px;
+    border: 1px solid var(--dt-border);
+    background: var(--dt-surface);
+    color: var(--dt-fg);
+    font-family: inherit;
+    font-size: 12px;
+    cursor: pointer;
+    outline: none;
+  }
+  .dt-select:hover { border-color: var(--dt-border-strong); }
+
+  .key-hint {
+    font-family: var(--dt-mono);
+    font-size: 10.5px;
+    color: var(--dt-fg-subtle);
+  }
+
+  .win-controls { display: inline-flex; align-items: center; margin-left: 2px; flex-shrink: 0; }
+  .win-ctrl {
+    width: 28px;
+    height: 24px;
+    border: none;
+    background: transparent;
+    color: var(--dt-fg-subtle);
+    border-radius: 4px;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .win-ctrl:hover { background: var(--dt-hover); color: var(--dt-fg); }
+  .win-ctrl.close:hover { background: #c42b1c; color: #ffffff; }
+
+  /* ==========================================================================
+     TITLEBAR & ORDERLY TAB STRIP (Single-Row Scroll ↔ Multi-Row Grid Wrap)
+     ========================================================================== */
+  .dt-titlebar {
+    height: 38px;
+    flex-shrink: 0;
+    background: var(--dt-chrome);
+    border-bottom: 1px solid var(--dt-border);
+    display: flex;
+    align-items: center;
+    padding: 0 10px;
+    gap: 6px;
+  }
+  .dt-titlebar.thin { height: 36px; }
+
+  .brand-mark {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-weight: 600;
+    font-size: 12.5px;
+    color: var(--dt-fg);
+    padding-right: 4px;
+    flex-shrink: 0;
+  }
+
+  /* Dedicated orderly tab container (used in Multi-Row mode for A, and always for B) */
+  .tab-bar-row {
+    flex-shrink: 0;
+    background: var(--dt-chrome);
+    border-bottom: 1px solid var(--dt-border);
+    padding: 5px 10px;
+    display: flex;
+    align-items: flex-start;
+    gap: 6px;
+  }
+
+  .h-tabs {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+  .h-tabs.single-row {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .h-tabs.single-row::-webkit-scrollbar { display: none; }
+
+  /* Multi-row: strict grid-aligned equal-width cells, capped at ~3 rows */
+  .h-tabs.multi-row {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(136px, 1fr));
+    gap: 5px;
+    max-height: 94px;
+    overflow-y: auto;
+    align-content: start;
+  }
+
+  .h-tab {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    height: 27px;
+    padding: 0 9px;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--dt-fg-muted);
+    cursor: pointer;
+    flex-shrink: 0;
+    font-size: 12px;
+    position: relative;
+  }
+  .h-tabs.single-row .h-tab {
+    min-width: 96px;
+    max-width: 184px;
+  }
+  .h-tabs.multi-row .h-tab {
+    display: flex;
+    width: 100%;
+    min-width: 0;
+    max-width: none;
+    background: var(--dt-surface);
+    border: 1px solid transparent;
+  }
+  .h-tab:hover { background: var(--dt-hover); color: var(--dt-fg); }
+  .h-tab.active {
+    background: var(--dt-bg);
+    color: var(--dt-fg);
+    font-weight: 500;
+    box-shadow: inset 0 0 0 1px var(--dt-border-strong);
+  }
+  .h-tab.active::before {
+    content: "";
+    position: absolute;
+    left: 10px;
+    right: 10px;
+    bottom: 0;
+    height: 2px;
+    border-radius: 2px 2px 0 0;
+    background: var(--dt-accent);
+  }
+  .h-tab.rich { max-width: 224px; }
+
+  .h-tab-text {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+  .h-tab-snippet {
+    font-family: var(--dt-mono);
+    font-size: 10.5px;
+    color: var(--dt-fg-subtle);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 72px;
+  }
+  .tab-num {
+    font-family: var(--dt-mono);
+    font-size: 10px;
+    color: var(--dt-fg-subtle);
+    flex-shrink: 0;
+  }
+  .tab-dirty {
+    width: 4px;
+    height: 4px;
+    border-radius: 50%;
+    background: var(--dt-fg-subtle);
+    flex-shrink: 0;
+  }
+  .tab-close {
+    width: 16px;
+    height: 16px;
+    border: none;
+    background: transparent;
+    color: var(--dt-fg-subtle);
+    border-radius: 4px;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    margin-left: auto;
+    flex-shrink: 0;
+    opacity: 0;
+  }
+  .h-tab:hover .tab-close, .h-tab.active .tab-close, .c-vtab:hover .tab-close, .c-vtab.active .tab-close { opacity: 0.72; }
+  .tab-close:hover { opacity: 1 !important; background: var(--dt-active); color: var(--dt-fg); }
+
+  .tab-trailing {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    flex-shrink: 0;
+  }
+
+  .b-omni {
+    flex: 1;
+    max-width: 400px;
+    margin: 0 auto;
+    height: 26px;
+    background: var(--dt-bg);
+    border: 1px solid var(--dt-border);
+    border-radius: 6px;
+    padding: 0 10px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    cursor: pointer;
+    color: var(--dt-fg-muted);
+    font-size: 11.5px;
+    min-width: 0;
+  }
+  .b-omni:hover { border-color: var(--dt-border-strong); color: var(--dt-fg); }
+
+  /* ==========================================================================
+     SMART DETECTION STRIP (Quiet, aligned, never noisy)
+     ========================================================================== */
+  .smart-banner {
+    flex-shrink: 0;
+    background: var(--dt-surface);
+    border-bottom: 1px solid var(--dt-border);
+    padding: 0 14px;
+    height: 34px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .smart-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11.5px;
+    font-weight: 500;
+    color: var(--dt-accent);
+    white-space: nowrap;
+  }
+  .smart-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--dt-accent);
+    flex-shrink: 0;
+  }
+  .smart-preview {
+    font-family: var(--dt-mono);
+    font-size: 11px;
+    color: var(--dt-fg-subtle);
+    max-width: 240px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .smart-recs {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    margin-left: auto;
+    flex-shrink: 0;
+  }
+
+  .b-smart-toast {
+    position: absolute;
+    right: 16px;
+    bottom: 14px;
+    z-index: 25;
+    max-width: 350px;
+    background: var(--dt-chrome);
+    border: 1px solid var(--dt-border-strong);
+    border-radius: 8px;
+    box-shadow: 0 10px 26px rgba(0, 0, 0, 0.30);
+    padding: 10px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .c-smart-box {
+    margin: 8px 8px 2px;
+    padding: 9px 10px;
+    border-radius: 7px;
+    background: var(--dt-surface);
+    border: 1px solid var(--dt-border);
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    flex-shrink: 0;
+  }
+
+  /* ==========================================================================
+     BODY SHELLS (Uniform vertical rhythm, calm alignment)
+     ========================================================================== */
+  .dt-body {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .a-sidebar {
+    width: 196px;
+    flex-shrink: 0;
+    background: var(--dt-chrome);
+    border-right: 1px solid var(--dt-border);
+    display: flex;
+    flex-direction: column;
+    overflow-y: auto;
+    padding: 10px 8px;
+    gap: 2px;
+  }
+  .a-sidebar.collapsed {
+    width: 46px;
+    padding: 10px 4px;
+    align-items: center;
+    gap: 4px;
+  }
+
+  .nav-head {
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--dt-fg-subtle);
+    padding: 12px 8px 4px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .nav-item {
+    width: 100%;
+    height: 30px;
+    text-align: left;
+    border: none;
+    background: transparent;
+    color: var(--dt-fg-muted);
+    border-radius: 6px;
+    padding: 0 8px;
+    font-size: 12.5px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .nav-item:hover { background: var(--dt-hover); color: var(--dt-fg); }
+  .nav-item.active { background: var(--dt-active); color: var(--dt-fg); font-weight: 500; }
+  .nav-item.smart-hit { color: var(--dt-fg); }
+  .nav-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  .b-rail {
+    width: 46px;
+    flex-shrink: 0;
+    background: var(--dt-chrome);
+    border-right: 1px solid var(--dt-border);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 10px 0;
+    gap: 4px;
+    z-index: 15;
+  }
+  .b-rail-btn {
+    width: 32px;
+    height: 32px;
+    border-radius: 6px;
+    border: none;
+    background: transparent;
+    color: var(--dt-fg-subtle);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+  }
+  .b-rail-btn:hover { background: var(--dt-hover); color: var(--dt-fg); }
+  .b-rail-btn.active { background: var(--dt-active); color: var(--dt-fg); }
+  .b-rail-dot { position: absolute; top: 5px; right: 5px; width: 5px; height: 5px; border-radius: 50%; background: var(--dt-accent); }
+
+  .b-flyout {
+    position: absolute;
+    left: 46px;
+    top: 0;
+    bottom: 0;
+    width: 224px;
+    background: var(--dt-chrome);
+    border-right: 1px solid var(--dt-border-strong);
+    box-shadow: 10px 0 28px rgba(0, 0, 0, 0.25);
+    z-index: 20;
+    display: flex;
+    flex-direction: column;
+    overflow-y: auto;
+    padding: 10px 8px;
+    gap: 2px;
+  }
+
+  .c-column {
+    width: 216px;
+    flex-shrink: 0;
+    background: var(--dt-chrome);
+    border-right: 1px solid var(--dt-border);
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+  }
+  .c-column.collapsed { width: 46px; align-items: center; padding: 10px 4px; gap: 4px; }
+  .c-vtabs { padding: 8px; border-bottom: 1px solid var(--dt-border); display: flex; flex-direction: column; gap: 2px; max-height: 230px; overflow-y: auto; }
+  .c-vtab {
+    width: 100%;
+    text-align: left;
+    border: none;
+    background: transparent;
+    border-radius: 6px;
+    padding: 6px 8px;
+    cursor: pointer;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .c-vtab:hover { background: var(--dt-hover); }
+  .c-vtab.active { background: var(--dt-active); }
+  .c-vtab-top { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--dt-fg); }
+  .c-vtab.active .c-vtab-top { font-weight: 500; }
+  .c-vtab-sub { padding-left: 20px; font-family: var(--dt-mono); font-size: 10px; color: var(--dt-fg-subtle); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .c-catalog-tabs { display: flex; padding: 2px 10px 0; gap: 14px; border-bottom: 1px solid var(--dt-border); }
+  .c-cat-tab { border: none; background: transparent; color: var(--dt-fg-subtle); font-size: 11.5px; padding: 7px 0; cursor: pointer; border-bottom: 1.5px solid transparent; }
+  .c-cat-tab.active { color: var(--dt-fg); border-bottom-color: var(--dt-fg); font-weight: 500; }
+  .c-catalog-list { flex: 1; min-height: 0; overflow-y: auto; padding: 8px; display: flex; flex-direction: column; gap: 1px; }
+
+  /* ==========================================================================
+     MAIN WORKSPACE — SPACIOUS, BALANCED, ONE CLEAR FOCAL POINT
+     ========================================================================== */
+  .dt-main {
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    background: var(--dt-bg);
+    position: relative;
+  }
+
+  .tool-header {
+    height: 44px;
+    flex-shrink: 0;
+    padding: 0 16px;
+    border-bottom: 1px solid var(--dt-border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+  }
+  .tool-header-left { display: flex; align-items: center; gap: 10px; min-width: 0; }
+  .tool-title { font-weight: 600; font-size: 13.5px; color: var(--dt-fg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .tool-header-right { display: flex; align-items: center; gap: 5px; flex-shrink: 0; position: relative; }
+
+  .tool-canvas { flex: 1; min-height: 0; display: flex; overflow: hidden; }
+  .tool-canvas.split-h { flex-direction: row; }
+  .tool-canvas.split-v { flex-direction: column; }
+  .tool-canvas.single { flex-direction: column; }
+
+  .pane { min-width: 0; min-height: 0; display: flex; flex-direction: column; background: var(--dt-bg); overflow: hidden; }
+  .pane-label-row {
+    height: 32px;
+    flex-shrink: 0;
+    padding: 0 14px 0 16px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: 11.5px;
+    color: var(--dt-fg-subtle);
+  }
+  .pane-mini-actions { display: inline-flex; align-items: center; gap: 4px; }
+  .text-link {
+    border: none;
+    background: transparent;
+    color: var(--dt-fg-subtle);
+    font-size: 11.5px;
+    padding: 2px 6px;
+    border-radius: 4px;
+    cursor: pointer;
+  }
+  .text-link:hover { color: var(--dt-fg); background: var(--dt-hover); }
+
+  .code-wrap { flex: 1; min-height: 0; display: flex; overflow: hidden; }
+  .line-gutter {
+    width: 38px;
+    flex-shrink: 0;
+    padding: 4px 12px 16px 0;
+    text-align: right;
+    font-family: var(--dt-mono);
+    font-size: 11px;
+    line-height: 22px;
+    color: var(--dt-gutter);
+    user-select: none;
+    overflow: hidden;
+  }
+  .pane-editor, .pane-output {
+    flex: 1;
+    width: 100%;
+    min-height: 0;
+    border: none;
+    resize: none;
+    padding: 4px 16px 16px 2px;
+    background: transparent;
+    color: var(--dt-fg);
+    font-family: var(--dt-mono);
+    font-size: 12.5px;
+    line-height: 22px;
+    outline: none;
+    user-select: text;
+  }
+  .pane-output { overflow: auto; white-space: pre-wrap; word-break: break-word; }
+
+  .dt-footer {
+    height: 26px;
+    flex-shrink: 0;
+    background: var(--dt-chrome);
+    border-top: 1px solid var(--dt-border);
+    padding: 0 16px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    font-family: var(--dt-mono);
+    font-size: 10.5px;
+    color: var(--dt-fg-subtle);
+  }
+  .footer-ok { display: inline-flex; align-items: center; gap: 6px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ok-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--dt-ok); flex-shrink: 0; }
+  .ok-dot.err { background: var(--dt-err); }
+
+  .split-handle { flex-shrink: 0; position: relative; background: var(--dt-border); }
+  .split-h > .split-handle { width: 1px; cursor: col-resize; }
+  .split-v > .split-handle { height: 1px; cursor: row-resize; }
+  .split-h > .split-handle::before { content: ""; position: absolute; top: 0; bottom: 0; left: -3px; right: -3px; }
+  .split-v > .split-handle::before { content: ""; position: absolute; left: 0; right: 0; top: -3px; bottom: -3px; }
+  .split-handle:hover { background: var(--dt-accent); }
+
+  .syn-k { color: var(--syn-key); }
+  .syn-s { color: var(--syn-str); }
+  .syn-n { color: var(--syn-num); }
+  .syn-b { color: var(--syn-bool); }
+
+  .mini-table { width: 100%; border-collapse: collapse; font-size: 12px; font-family: var(--dt-mono); }
+  .mini-table th, .mini-table td { border-bottom: 1px solid var(--dt-border); padding: 6px 10px; text-align: left; }
+  .mini-table th { color: var(--dt-fg-muted); font-weight: 500; }
+
+  /* Workbench Home */
+  .home-view {
+    flex: 1;
+    overflow-y: auto;
+    padding: 28px 28px 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+    max-width: 680px;
+    width: 100%;
+    margin: 0 auto;
+  }
+  .home-search-box {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    background: var(--dt-surface);
+    border: 1px solid var(--dt-border-strong);
+    border-radius: 8px;
+    padding: 9px 12px;
+  }
+  .home-search-box input { flex: 1; border: none; background: transparent; outline: none; font-size: 13px; color: var(--dt-fg); }
+  .home-smart-row {
+    background: var(--dt-surface);
+    border: 1px solid var(--dt-border);
+    border-radius: 8px;
+    padding: 10px 14px;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+  .home-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(175px, 1fr)); gap: 8px; }
+  .tool-card {
+    text-align: left;
+    background: transparent;
+    border: 1px solid var(--dt-border);
+    border-radius: 7px;
+    padding: 10px 12px;
+    cursor: pointer;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+  }
+  .tool-card:hover { background: var(--dt-surface); border-color: var(--dt-border-strong); }
+  .tool-card-title { font-weight: 500; font-size: 12.5px; color: var(--dt-fg); display: flex; align-items: center; gap: 6px; }
+  .tool-card-sub { font-size: 11px; color: var(--dt-fg-subtle); padding-left: 20px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  .relay-menu {
+    position: absolute;
+    right: 0;
+    top: 34px;
+    z-index: 35;
+    width: 224px;
+    background: var(--dt-chrome);
+    border: 1px solid var(--dt-border-strong);
+    border-radius: 8px;
+    box-shadow: 0 12px 28px rgba(0, 0, 0, 0.36);
+    padding: 5px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .relay-header { font-size: 11px; color: var(--dt-fg-subtle); padding: 4px 8px 6px; border-bottom: 1px solid var(--dt-border); margin-bottom: 2px; }
+
+  .palette-backdrop {
+    position: absolute;
+    inset: 0;
+    z-index: 40;
+    background: rgba(0, 0, 0, 0.38);
+    display: flex;
+    justify-content: center;
+    align-items: flex-start;
+    padding-top: 48px;
+  }
+  .palette-modal {
+    width: 480px;
+    max-width: calc(100% - 24px);
+    max-height: 380px;
+    background: var(--dt-chrome);
+    border: 1px solid var(--dt-border-strong);
+    border-radius: 9px;
+    box-shadow: 0 18px 46px rgba(0, 0, 0, 0.48);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  .palette-input-row { display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--dt-border); color: var(--dt-fg-muted); }
+  .palette-input-row input { flex: 1; border: none; background: transparent; outline: none; font-size: 13px; color: var(--dt-fg); }
+  .palette-list { flex: 1; overflow-y: auto; padding: 6px; display: flex; flex-direction: column; gap: 2px; }
+  .palette-group { font-size: 10.5px; font-weight: 500; color: var(--dt-fg-subtle); padding: 6px 8px 3px; }
+  .palette-item {
+    width: 100%;
+    text-align: left;
+    border: none;
+    background: transparent;
+    color: var(--dt-fg);
+    border-radius: 6px;
+    padding: 7px 8px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+  .palette-item.selected, .palette-item:hover { background: var(--dt-active); }
+  .palette-footer { border-top: 1px solid var(--dt-border); padding: 7px 12px; font-size: 10.5px; color: var(--dt-fg-subtle); display: flex; justify-content: space-between; }
+
+  .dt-standby-view { height: 100%; display: flex; align-items: center; justify-content: center; padding: 24px; background: var(--dt-bg); }
+  .standby-card {
+    background: var(--dt-chrome);
+    border: 1px solid var(--dt-border-strong);
+    border-radius: 9px;
+    padding: 22px 26px;
+    max-width: 400px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    gap: 10px;
+  }
+  .standby-status { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; font-family: var(--dt-mono); color: var(--dt-fg-muted); }
+  .status-dot { width: 6px; height: 6px; border-radius: 50%; }
+  .status-dot.warm { background: var(--dt-warn); }
+  .status-dot.deep { background: var(--dt-ok); }
+
+  .dt-toast {
+    position: absolute;
+    left: 50%;
+    bottom: 36px;
+    transform: translateX(-50%);
+    z-index: 45;
+    background: var(--dt-chrome);
+    border: 1px solid var(--dt-border-strong);
+    color: var(--dt-fg);
+    padding: 6px 14px;
+    border-radius: 6px;
+    font-size: 11.5px;
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.32);
+    white-space: nowrap;
+  }
+
+  /* ==========================================================================
+     NEAT ALIGNED BOTTOM BAR & SYMMETRICAL EVAL PANEL
+     ========================================================================== */
+  .bottom-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+  }
+  .variant-switcher {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 8px;
+    border-radius: 7px;
+    background: var(--card, #1a1c20);
+    color: var(--foreground, #eceef2);
+    border: 1px solid var(--border, #2b2e36);
+    font-size: 12px;
+  }
+  .sw-arrow {
+    width: 24px;
+    height: 24px;
+    border-radius: 5px;
+    border: none;
+    background: transparent;
+    color: var(--muted-foreground, #8b909a);
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .sw-arrow:hover { background: var(--secondary, #262932); color: var(--foreground, #f8fafc); }
+  .sw-label { font-weight: 500; padding: 0 4px; white-space: nowrap; }
+  .sw-pills { display: inline-flex; background: var(--secondary, #22252d); border-radius: 5px; padding: 2px; gap: 2px; }
+  .sw-pill {
+    border: none;
+    background: transparent;
+    color: var(--muted-foreground, #8b909a);
+    border-radius: 4px;
+    padding: 2px 8px;
+    font-size: 11px;
+    font-weight: 500;
+    cursor: pointer;
+  }
+  .sw-pill.active { background: var(--card, #121417); color: var(--foreground, #f8fafc); box-shadow: 0 1px 2px rgba(0,0,0,0.2); }
+
+  .eval-box {
+    background: var(--card, #1a1c20);
+    border: 1px solid var(--border, #2b2e36);
+    border-radius: 8px;
+    overflow: hidden;
+  }
+  .eval-bar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 7px 14px;
+    border-bottom: 1px solid var(--border, #2b2e36);
+  }
+  .eval-tabs { display: inline-flex; gap: 16px; }
+  .eval-tab {
+    font-family: inherit;
+    font-size: 12px;
+    padding: 3px 0;
+    border: none;
+    border-bottom: 1.5px solid transparent;
+    background: transparent;
+    color: var(--muted-foreground, #8b909a);
+    cursor: pointer;
+  }
+  .eval-tab.active { color: var(--foreground, #f8fafc); border-bottom-color: var(--foreground, #f8fafc); font-weight: 500; }
+  .eval-summary {
+    font-family: var(--font-mono, monospace);
+    font-size: 11px;
+    color: var(--muted-foreground, #8b909a);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .eval-body { padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; }
+
+  .sc-strip { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
+  .sc-pills { display: inline-flex; flex-wrap: wrap; gap: 5px; }
+  .sc-pill {
+    font-family: inherit;
+    font-size: 11.5px;
+    padding: 4px 10px;
+    border-radius: 5px;
+    border: 1px solid var(--border, #2b2e36);
+    background: transparent;
+    color: var(--muted-foreground, #8b909a);
+    cursor: pointer;
+  }
+  .sc-pill.active { background: var(--secondary, #272b34); color: var(--foreground, #f8fafc); border-color: var(--muted-foreground, #5a616e); font-weight: 500; }
+
+  /* Strictly symmetrical 2x2 (or 4x1 on wide) grid */
+  .step-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+  }
+  @media (min-width: 960px) {
+    .step-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  }
+  .step-btn {
+    text-align: left;
+    font-family: inherit;
+    font-size: 11.5px;
+    padding: 8px 10px;
+    border-radius: 6px;
+    border: 1px solid var(--border, #2b2e36);
+    background: transparent;
+    color: var(--foreground, #d8dce4);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .step-btn:hover { background: var(--secondary, #23262e); }
+  .step-btn.current { background: var(--secondary, #252932); border-color: var(--muted-foreground, #636b78); color: var(--foreground, #f8fafc); font-weight: 500; }
+  .step-btn.done { opacity: 0.55; }
+  .step-idx { font-family: var(--font-mono, monospace); font-size: 10.5px; color: var(--muted-foreground, #767d8a); flex-shrink: 0; }
+  .step-btn.done .step-idx { color: var(--success, #4cb782); }
+
+  .state-kv { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px 16px; }
+  .kv-item { display: flex; flex-direction: column; gap: 3px; }
+  .kv-k { font-size: 10.5px; color: var(--muted-foreground, #8b909a); }
+  .kv-v { color: var(--foreground, #e6e8ec); font-family: var(--font-mono, monospace); font-size: 11px; word-break: break-word; }
+</style>
+</head>
+<body>
+<div class="proto-root" id="app"></div>
+
+<script>
+const ICONS = {
+  sidebar: '<rect x="3" y="4" width="18" height="16" rx="2"/><line x1="9" y1="4" x2="9" y2="20"/>',
+  home: '<path d="M3 10.5L12 3l9 7.5"/><path d="M5 9.5V20h14V9.5"/>',
+  search: '<circle cx="11" cy="11" r="7"/><line x1="20" y1="20" x2="16" y2="16"/>',
+  star: '<polygon points="12 3 15 9 21 9.8 16.5 14.2 17.6 20.5 12 17.4 6.4 20.5 7.5 14.2 3 9.8 9 9 12 3"/>',
+  clock: '<circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 15 14"/>',
+  plus: '<line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>',
+  close: '<line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/>',
+  min: '<line x1="5" y1="12" x2="19" y2="12"/>',
+  max: '<rect x="5" y="5" width="14" height="14" rx="1"/>',
+  copy: '<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>',
+  send: '<line x1="7" y1="17" x2="17" y2="7"/><polyline points="8 7 17 7 17 16"/>',
+  chevDown: '<polyline points="6 9 12 15 18 9"/>',
+  chevRight: '<polyline points="9 6 15 12 9 18"/>',
+  chevLeft: '<polyline points="15 6 9 12 15 18"/>',
+  splitH: '<rect x="3" y="4" width="18" height="16" rx="2"/><line x1="12" y1="4" x2="12" y2="20"/>',
+  splitV: '<rect x="3" y="4" width="18" height="16" rx="2"/><line x1="3" y1="12" x2="21" y2="12"/>',
+  single: '<rect x="3" y="4" width="18" height="16" rx="2"/>',
+  rows: '<line x1="3" y1="8" x2="21" y2="8"/><line x1="3" y1="16" x2="15" y2="16"/>',
+  oneRow: '<line x1="3" y1="12" x2="21" y2="12"/>',
+  tray: '<polyline points="4 14 4 19 20 19 20 14"/><polyline points="8 10 12 14 16 10"/><line x1="12" y1="3" x2="12" y2="14"/>',
+  command: '<path d="M18 3a3 3 0 0 0-3 3v12a3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3H6a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3V6a3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3h12a3 3 0 0 0 3-3 3 3 0 0 0-3-3z"/>',
+  reset: '<path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><polyline points="3 3 3 8 8 8"/>',
+  convert: '<polyline points="17 2 21 6 17 10"/><line x1="3" y1="6" x2="21" y2="6"/><polyline points="7 22 3 18 7 14"/><line x1="21" y1="18" x2="3" y2="18"/>',
+  encode: '<polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/>',
+  braces: '<path d="M8 3H7a2 2 0 0 0-2 2v5a2 2 0 0 1-2 2 2 2 0 0 1 2 2v5a2 2 0 0 0 2 2h1"/><path d="M16 21h1a2 2 0 0 0 2-2v-5a2 2 0 0 1 2-2 2 2 0 0 1-2-2V5a2 2 0 0 0-2-2h-1"/>',
+  spark: '<path d="M12 3v18M3 12h18M5.6 5.6l12.8 12.8M18.4 5.6L5.6 18.4"/>',
+  diff: '<line x1="6" y1="5" x2="6" y2="11"/><line x1="3" y1="8" x2="9" y2="8"/><line x1="3" y1="16" x2="9" y2="16"/><line x1="14" y1="8" x2="21" y2="8"/><line x1="14" y1="16" x2="21" y2="16"/>',
+  terminal: '<polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/>',
+  shield: '<path d="M12 3l7 3v5c0 5-3.2 8.7-7 10-3.8-1.3-7-5-7-10V6l7-3z"/>',
+  table: '<rect x="3" y="4" width="18" height="16" rx="1.5"/><line x1="3" y1="10" x2="21" y2="10"/><line x1="9" y1="10" x2="9" y2="20"/>',
+  link: '<path d="M10 13a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1.5 1.5"/><path d="M14 11a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l1.5-1.5"/>',
+  hash: '<line x1="4" y1="9" x2="20" y2="9"/><line x1="4" y1="15" x2="20" y2="15"/><line x1="10" y1="3" x2="8" y2="21"/><line x1="16" y1="3" x2="14" y2="21"/>',
+  key: '<circle cx="8" cy="15" r="4"/><path d="M11 12l9-9"/><path d="M17 6l3 3"/>',
+  globe: '<circle cx="12" cy="12" r="9"/><line x1="3" y1="12" x2="21" y2="12"/><path d="M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/>',
+  qr: '<rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><path d="M14 14h3v3h-3zM19 19h2v2h-2zM14 20h3"/>',
+  palette: '<circle cx="12" cy="12" r="9"/><circle cx="9" cy="10" r="1"/><circle cx="15" cy="10" r="1"/><circle cx="12" cy="15" r="1"/>',
+  file: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/>',
+  brand: '<rect x="3" y="3" width="18" height="18" rx="3"/><polyline points="8 9 11 12 8 15"/><line x1="13" y1="15" x2="16" y2="15"/>'
+};
+
+function icon(name, sm = false) {
+  return `<svg class="ico ${sm ? "ico-sm" : ""}" viewBox="0 0 24 24" aria-hidden="true">${ICONS[name] || ICONS.terminal}</svg>`;
+}
+
+/* ============================================================================
+   PART 1 — PORTABLE PURE CORE MODULE
+   ============================================================================ */
+const DevToolsCore = (() => {
+  const VARIANTS = [
+    { id: "AB", name: "A+B 融合（可折叠图标轨抽屉 + 多行/单行页签）", short: "A+B 融合" },
+    { id: "A", name: "经典三段（顶栏标签 + 左侧导航）", short: "方案 A" },
+    { id: "B", name: "画布优先（46px 图标轨 + 浮层抽屉）", short: "方案 B" },
+    { id: "C", name: "多实例专精（左侧垂直标签堆叠）", short: "方案 C" }
+  ];
+
+  const CATEGORIES = [
+    { id: "converters", name: "转换", en: "Converters", icon: "convert" },
+    { id: "encoders", name: "编解码", en: "Encoders / Decoders", icon: "encode" },
+    { id: "formatters", name: "格式化", en: "Formatters", icon: "braces" },
+    { id: "generators", name: "生成器", en: "Generators", icon: "spark" },
+    { id: "text", name: "文本与对比", en: "Text", icon: "diff" },
+    { id: "dev", name: "调试与开发", en: "Testers & Dev", icon: "terminal" },
+    { id: "security", name: "安全与网络", en: "Crypto & Network", icon: "shield" }
+  ];
+
+  const TOOLS = [
+    { id: "data-converter", cat: "converters", name: "数据格式互转", en: "JSON / YAML / TOML / XML", aliases: ["yaml", "toml", "xml", "json", "fmt", "sjgs", "zh"], icon: "convert", modes: ["JSON → YAML", "YAML → JSON", "JSON → TOML"], defaultLayout: "split-h", sample: '{\n  "app": "DevTools",\n  "offline": true,\n  "tools": 28\n}' },
+    { id: "timestamp", cat: "converters", name: "日期与时间戳", en: "Date & Timestamp", aliases: ["ts", "epoch", "unix", "date", "time", "sjc", "rq"], icon: "clock", modes: ["时间戳 → 日期", "日期 → 时间戳"], defaultLayout: "split-h", sample: "1764208473" },
+    { id: "number-base", cat: "converters", name: "进制转换", en: "Number Base", aliases: ["hex", "bin", "oct", "dec", "base", "jz"], icon: "hash", modes: ["自动识别进制"], defaultLayout: "split-h", sample: "0xFF2A" },
+    { id: "color-converter", cat: "converters", name: "颜色转换", en: "Color Converter", aliases: ["color", "hex", "rgb", "hsl", "cmyk", "ys"], icon: "palette", modes: ["HEX / RGB / HSL"], defaultLayout: "split-h", sample: "#3B7BE0" },
+    { id: "json-to-table", cat: "converters", name: "JSON 转表格", en: "JSON to Table / CSV", aliases: ["csv", "table", "tsv", "json", "bg"], icon: "table", modes: ["交互表格", "导出 CSV"], defaultLayout: "split-v", sample: '[{"id":101,"name":"Alice","role":"admin"},{"id":102,"name":"Bob","role":"dev"}]' },
+    { id: "base64", cat: "encoders", name: "Base64 编解码", en: "Base64 Text / Image", aliases: ["b64", "base64", "encode", "decode", "bm"], icon: "encode", modes: ["编码", "解码", "URL-Safe"], defaultLayout: "split-h", sample: "eyJ0b29sIjoiRGV2VG9vbHMiLCJ2ZXJzaW9uIjoiVjEifQ==" },
+    { id: "url-parser", cat: "encoders", name: "URL 编解码解析", en: "URL Encoder & Parser", aliases: ["url", "uri", "query", "percent", "jx"], icon: "link", modes: ["解析拆解", "URL 编码", "URL 解码"], defaultLayout: "split-h", sample: "https://api.example.com/v1/search?q=rust+gpui&page=2&token=secret_abc123" },
+    { id: "html-unicode", cat: "encoders", name: "HTML / Unicode", en: "HTML & Unicode", aliases: ["html", "unicode", "entity", "u", "st"], icon: "encode", modes: ["解码", "编码"], defaultLayout: "split-h", sample: "\\u4e2d\\u6587 &amp; &lt;DevTools&gt;" },
+    { id: "string-escape", cat: "encoders", name: "字符串转义", en: "Escape / Unescape", aliases: ["escape", "unescape", "str", "zy"], icon: "encode", modes: ["反转义", "转义"], defaultLayout: "split-h", sample: 'line1\\n\\t\\"hello\\"\\\\world' },
+    { id: "gzip", cat: "encoders", name: "GZip 压缩解压", en: "GZip Compress / Decompress", aliases: ["gzip", "gz", "compress", "ys"], icon: "encode", modes: ["解压", "压缩"], defaultLayout: "split-h", sample: "H4sIAAAAAAAA/ytJLS4BAAx+f9gEAAAA" },
+    { id: "json-formatter", cat: "formatters", name: "JSON 格式化", en: "JSON Formatter", aliases: ["json", "fmt", "pretty", "minify", "gsh"], icon: "braces", modes: ["美化 · 2 空格", "美化 · 4 空格", "键排序", "压缩 Minify"], defaultLayout: "split-h", sample: '{"service":"devtools","v1":true,"features":["tray","hotkey","smart-detection"]}' },
+    { id: "sql-formatter", cat: "formatters", name: "SQL 格式化", en: "SQL Formatter", aliases: ["sql", "fmt", "query", "gsh"], icon: "braces", modes: ["标准 SQL", "PostgreSQL"], defaultLayout: "split-h", sample: "select id,name,role from users where active=1 order by created_at desc" },
+    { id: "xml-html-formatter", cat: "formatters", name: "XML / HTML 格式化", en: "XML & HTML Formatter", aliases: ["xml", "html", "fmt", "gsh"], icon: "braces", modes: ["XML", "HTML"], defaultLayout: "split-h", sample: "<config><app>DevTools</app><mode>offline</mode></config>" },
+    { id: "uuid-generator", cat: "generators", name: "UUID / ULID 生成", en: "UUID & ULID Generator", aliases: ["uuid", "ulid", "guid", "id", "sc"], icon: "spark", modes: ["UUID v7", "UUID v4", "ULID"], defaultLayout: "single", sample: "5" },
+    { id: "password-generator", cat: "generators", name: "密码与 Token", en: "Password & Token", aliases: ["pwd", "password", "token", "secret", "mm"], icon: "key", modes: ["强密码", "Hex Token"], defaultLayout: "single", sensitiveOutput: true, sample: "24" },
+    { id: "qr-code", cat: "generators", name: "二维码编解码", en: "QR Code Encoder / Decoder", aliases: ["qr", "qrcode", "ewm", "scan"], icon: "qr", modes: ["生成", "解码"], defaultLayout: "split-h", sample: "https://github.com/wangneal369/IT-Tools" },
+    { id: "text-diff", cat: "text", name: "文本对比", en: "Text Diff", aliases: ["diff", "compare", "wbdb"], icon: "diff", modes: ["并排", "行内"], defaultLayout: "split-h", sample: "line 1: Rust 1.92\nline 2: gpui-kit 0.11\n---\nline 1: Rust 1.92\nline 2: gpui-kit 0.11 (pinned)" },
+    { id: "json-diff", cat: "text", name: "JSON 语义对比", en: "JSON Diff", aliases: ["jdiff", "json", "diff", "yydb"], icon: "diff", modes: ["忽略键序"], defaultLayout: "split-h", sample: '{"a":1,"b":2}\n---\n{"b":2,"a":1,"c":3}' },
+    { id: "text-analyzer", cat: "text", name: "文本分析处理", en: "Text Analyzer & Utilities", aliases: ["case", "camel", "snake", "sort", "dedup", "wbfx"], icon: "file", modes: ["命名转换", "去重排序"], defaultLayout: "split-h", sample: "smart_detection_engine\nworkbench_home_view" },
+    { id: "list-comparer", cat: "text", name: "列表集合对比", en: "List Comparer", aliases: ["list", "set", "diff", "lb"], icon: "diff", modes: ["交集 / 差集"], defaultLayout: "split-h", sample: "alpha\nbeta\ngamma\n---\nbeta\ndelta" },
+    { id: "regex-tester", cat: "dev", name: "正则表达式测试", en: "Regex Tester", aliases: ["re", "regex", "regexp", "zz"], icon: "terminal", modes: ["全局匹配 (g)"], defaultLayout: "split-v", sample: "/(?<key>[a-z_]+)=(?<val>\\d+)/g\nport=8080 timeout=300" },
+    { id: "jsonpath-tester", cat: "dev", name: "JSONPath 查询", en: "JSONPath Tester", aliases: ["jp", "jsonpath", "query", "cx"], icon: "terminal", modes: ["$.[*].name"], defaultLayout: "split-h", sample: '[{"name":"Alice","active":true},{"name":"Bob","active":false}]' },
+    { id: "cron-parser", cat: "dev", name: "Cron 表达式解析", en: "Cron Parser", aliases: ["cron", "schedule", "ds"], icon: "clock", modes: ["5 段 Cron"], defaultLayout: "split-h", sample: "*/15 9-18 * * 1-5" },
+    { id: "chmod-calc", cat: "dev", name: "Chmod 权限计算", en: "Chmod Calculator", aliases: ["chmod", "perm", "755", "qx"], icon: "terminal", modes: ["八进制 / 符号"], defaultLayout: "split-h", sample: "chmod 755" },
+    { id: "jwt-debugger", cat: "security", name: "JWT 解析与签发", en: "JWT Debugger", aliases: ["jwt", "token", "jws", "auth"], icon: "shield", modes: ["解析验签", "签发 HS256"], defaultLayout: "split-h", sensitiveOutput: true, sample: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1c2VyXzQyIiwibmFtZSI6Ik5lYWwiLCJyb2xlIjoiYWRtaW4iLCJleHAiOjE4OTM0NTYwMDB9.dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk" },
+    { id: "hash-checksum", cat: "security", name: "Hash / HMAC", en: "Hash & Checksum", aliases: ["hash", "sha256", "md5", "hmac", "blake3", "jy"], icon: "hash", modes: ["文本摘要", "摘要比对"], defaultLayout: "split-h", sensitiveOutput: true, sample: "DevTools V1 Offline Core" },
+    { id: "x509-decoder", cat: "security", name: "X.509 证书解析", en: "Certificate Decoder", aliases: ["x509", "cert", "pem", "tls", "zs"], icon: "file", modes: ["PEM 解析"], defaultLayout: "split-h", sample: "-----BEGIN CERTIFICATE-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8A\n-----END CERTIFICATE-----" },
+    { id: "ipv4-cidr", cat: "security", name: "IPv4 / CIDR 子网", en: "IPv4 Subnet & CIDR", aliases: ["ip", "cidr", "subnet", "net", "zw"], icon: "globe", modes: ["CIDR 计算"], defaultLayout: "split-h", sample: "192.168.10.42/24" }
+  ];
+
+  const TOOL_MAP = Object.fromEntries(TOOLS.map(t => [t.id, t]));
+
+  const CLIPBOARD_PRESETS = [
+    { id: "jwt", label: "JWT Token（脱敏预览）", kind: "Text", concealed: false, text: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1c2VyXzk5IiwibmFtZSI6Ik5lYWwiLCJzY29wZSI6ImRldnRvb2xzOnYxIiwiZXhwIjoxODkzNDU2MDAwfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c" },
+    { id: "json-array", label: "JSON 数组（JsonArray）", kind: "Text", concealed: false, text: '[{"orderId":"ORD-2026-01","status":"paid","amount":128.5},{"orderId":"ORD-2026-02","status":"pending","amount":64.0}]' },
+    { id: "url-secret", label: "含凭据 URL（压制 Base64）", kind: "Text", concealed: false, text: "https://console.internal.dev/oauth/callback?code=9f8a7b&api_key=live_9988776655&redirect=%2Fdashboard" },
+    { id: "b64-jwt", label: "Base64 文本（内含 JWT）", kind: "Text", concealed: false, text: "ZXlKaGJHY2lPaUpJVXpJMU5pSXNJblI1Y0NJNklrcFhWQ0o5LmV5SnpkV0lpT2lKMWMyVnlYekV3TWlJc0ltNWhiV1VpT2lKRlpXUnpJaXdpY205c1pTSTZJbUZrYldsdUlpd2laWGh3SWpveE9Ea3pORFUyTURBd2ZRLmRCamZ0SmVaNENWUC1tQjkySzI3dWhiVUpVMXAxcg==" },
+    { id: "password-mgr", label: "密码管理器标记（零读取）", kind: "Text", concealed: true, concealedTag: "org.nspasteboard.ConcealedType", text: "SuperSecretMasterPass!2026" },
+    { id: "private-key", label: "高危私钥 PEM（静默拦截）", kind: "Text", concealed: false, text: "-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW\n-----END OPENSSH PRIVATE KEY-----" }
+  ];
+
+  function b64DecodeUtf8(str) {
+    try {
+      let s = str.trim().replace(/-/g, "+").replace(/_/g, "/");
+      while (s.length % 4) s += "=";
+      const bin = atob(s);
+      const bytes = Uint8Array.from(bin, c => c.charCodeAt(0));
+      return { ok: true, value: new TextDecoder("utf-8", { fatal: true }).decode(bytes) };
+    } catch { return { ok: false, value: "" }; }
+  }
+  function b64EncodeUtf8(str) {
+    const bytes = new TextEncoder().encode(str);
+    let bin = "";
+    bytes.forEach(b => (bin += String.fromCharCode(b)));
+    return btoa(bin);
+  }
+  function redactPreview(dataType, raw) {
+    const oneLine = raw.replace(/\s+/g, " ").trim();
+    if (dataType === "Jwt") {
+      const p = oneLine.split(".");
+      return `${p[0].slice(0, 12)}… . ${p[1].slice(0, 10)}… . [redacted]`;
+    }
+    if (dataType === "Url") return oneLine.replace(/((?:token|api_key|key|secret|password|auth)=)([^&]+)/gi, "$1••••");
+    return oneLine.length > 44 ? oneLine.slice(0, 44) + "…" : oneLine;
+  }
+
+  function runSmartDetection(clipboard, opts = {}) {
+    const { mode = "strict", excludeToolId = null, favorites = [], recents = [] } = opts;
+    if (!clipboard || (!clipboard.text && !clipboard.concealed)) return { skipped: true, reason: "剪贴板为空", matches: [], suppressed: [], recommendations: [] };
+    if (clipboard.concealed) return { skipped: true, guard: "PASSWORD_MANAGER_ZERO_READ", reason: `命中密码管理器隐藏标记（${clipboard.concealedTag || "ConcealedType"}），零读取跳过`, matches: [], suppressed: [], recommendations: [] };
+
+    const raw = (clipboard.text || "").trim();
+    if (!raw) return { skipped: true, reason: "剪贴板为空白文本", matches: [], suppressed: [], recommendations: [] };
+    if (/-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----/.test(raw) || /^(ghp_|github_pat_|AKIA[0-9A-Z]{16}|sk-[A-Za-z0-9]{12,})/.test(raw)) {
+      return { skipped: true, guard: "SENSITIVE_CREDENTIAL_BLOCK", reason: "命中高危私钥 / 云凭据启发式保护，已静默拦截", matches: [], suppressed: [], recommendations: [] };
+    }
+
+    const hits = [], suppressed = [];
+    if (/^[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{6,}$/.test(raw)) {
+      const h = b64DecodeUtf8(raw.split(".")[0]), p = b64DecodeUtf8(raw.split(".")[1]);
+      if (h.ok && p.ok && h.value.startsWith("{") && p.value.startsWith("{")) {
+        hits.push({ type: "Jwt", label: "JWT", confidence: 100, level: "Exact", specificity: 95, tools: [{ toolId: "jwt-debugger", autoMode: "解析验签" }] });
+      }
+    }
+    if (/-----BEGIN CERTIFICATE-----/.test(raw)) hits.push({ type: "CertificatePem", label: "X.509 证书", confidence: 100, level: "Exact", specificity: 94, tools: [{ toolId: "x509-decoder", autoMode: "PEM 解析" }] });
+    if (/^H4sI[A-Za-z0-9+/=]{8,}$/.test(raw)) hits.push({ type: "GZipBase64", label: "GZip Base64", confidence: 100, level: "Exact", specificity: 92, tools: [{ toolId: "gzip", autoMode: "解压" }] });
+    if ((raw.startsWith("{") && raw.endsWith("}")) || (raw.startsWith("[") && raw.endsWith("]"))) {
+      try {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed) && parsed.length > 0 && typeof parsed[0] === "object" && parsed[0] !== null) {
+          hits.push({ type: "JsonArray", parent: "Json", label: "JSON 数组", confidence: 100, level: "Exact", specificity: 90, tools: [
+            { toolId: "json-to-table", autoMode: "交互表格" },
+            { toolId: "json-formatter", autoMode: "美化 · 2 空格" },
+            { toolId: "jsonpath-tester", autoMode: "$.[*].name" }
+          ] });
+        } else if (typeof parsed === "object" && parsed !== null) {
+          hits.push({ type: "Json", label: "JSON", confidence: 75, level: "High", specificity: 80, tools: [
+            { toolId: "json-formatter", autoMode: "美化 · 2 空格" },
+            { toolId: "jsonpath-tester", autoMode: "$.[*].name" },
+            { toolId: "data-converter", autoMode: "JSON → YAML" }
+          ] });
+        }
+      } catch {}
+    }
+    if (/^https?:\/\/[^\s]+$/i.test(raw)) hits.push({ type: "Url", label: "URL", confidence: 100, level: "Exact", specificity: 88, tools: [{ toolId: "url-parser", autoMode: "解析拆解" }] });
+    if (/^\d{10}$/.test(raw) || /^\d{13}$/.test(raw)) {
+      const sec = raw.length === 13 ? Number(raw) / 1000 : Number(raw);
+      if (sec >= 157766400 && sec <= 4102444800) hits.push({ type: "UnixTimestamp", label: "时间戳", confidence: 75, level: "High", specificity: 78, tools: [{ toolId: "timestamp", autoMode: "时间戳 → 日期" }] });
+    }
+    if (raw.length >= 8 && /^[A-Za-z0-9+/_-]+=*$/.test(raw) && !/^\d+$/.test(raw) && !/^[a-zA-Z]{1,14}$/.test(raw)) {
+      const dec = b64DecodeUtf8(raw);
+      if (dec.ok && /^[\x09\x0A\x0D\x20-\x7E\u4e00-\u9fff]+$/.test(dec.value)) {
+        hits.push({ type: "Base64Text", label: "Base64", confidence: 50, level: "Medium", specificity: 45, tools: [{ toolId: "base64", autoMode: "解码" }] });
+      }
+    }
+
+    const types = new Set(hits.map(h => h.type));
+    const finalHits = hits.filter(h => {
+      if (h.type === "Base64Text" && (types.has("Jwt") || types.has("GZipBase64") || types.has("CertificatePem") || types.has("Url"))) {
+        suppressed.push("压制 Base64Text");
+        return false;
+      }
+      return true;
+    });
+
+    const recMap = new Map();
+    finalHits.sort((a, b) => (b.confidence - a.confidence) || (b.specificity - a.specificity));
+    for (const h of finalHits) {
+      for (const t of h.tools) {
+        if (t.toolId === excludeToolId) continue;
+        if (!recMap.has(t.toolId)) {
+          const boost = (favorites.includes(t.toolId) ? 2 : 0) + (recents.includes(t.toolId) ? 1 : 0);
+          recMap.set(t.toolId, { toolId: t.toolId, autoMode: t.autoMode, dataType: h.type, dataLabel: h.label, confidence: h.confidence, level: h.level, score: h.confidence * 100 + h.specificity + boost });
+        }
+      }
+    }
+    if (mode === "relay") {
+      for (const fb of [{ toolId: "base64", autoMode: "编码", dataType: "Text", dataLabel: "纯文本", confidence: 25, level: "Low" }, { toolId: "hash-checksum", autoMode: "文本摘要", dataType: "Text", dataLabel: "纯文本", confidence: 25, level: "Low" }]) {
+        if (fb.toolId !== excludeToolId && !recMap.has(fb.toolId)) recMap.set(fb.toolId, { ...fb, score: 2500 });
+      }
+    }
+
+    const recommendations = Array.from(recMap.values()).sort((a, b) => b.score - a.score);
+    const primaryHit = finalHits[0] || null;
+    return {
+      skipped: false,
+      primaryType: primaryHit?.type || null,
+      primaryLabel: primaryHit?.label || null,
+      primaryLevel: primaryHit?.level || null,
+      redactedPreview: primaryHit ? redactPreview(primaryHit.type, raw) : raw.slice(0, 40),
+      matches: finalHits,
+      suppressed,
+      recommendations
+    };
+  }
+
+  function fuzzyScore(query, tool) {
+    const q = query.trim().toLowerCase();
+    if (!q) return 1;
+    const fields = [
+      { text: tool.name.toLowerCase(), weight: 100 },
+      { text: tool.en.toLowerCase(), weight: 85 },
+      ...tool.aliases.map(a => ({ text: a.toLowerCase(), weight: 80 })),
+      { text: (CATEGORIES.find(c => c.id === tool.cat)?.name || "").toLowerCase(), weight: 40 }
+    ];
+    let best = 0;
+    for (const f of fields) {
+      if (f.text === q) best = Math.max(best, f.weight + 60);
+      else if (f.text.startsWith(q)) best = Math.max(best, f.weight + 40);
+      else if (f.text.includes(q)) best = Math.max(best, f.weight + 20);
+      else {
+        let qi = 0;
+        for (let i = 0; i < f.text.length && qi < q.length; i++) if (f.text[i] === q[qi]) qi++;
+        if (qi === q.length) best = Math.max(best, f.weight);
+      }
+    }
+    return best;
+  }
+
+  function computeToolOutput(toolId, mode, input) {
+    const text = (input || "").trim();
+    if (!text) return { text: "", kind: "text", status: "等待输入" };
+    try {
+      if (toolId === "json-formatter") {
+        const obj = JSON.parse(text);
+        if (mode.includes("压缩")) return { text: JSON.stringify(obj), kind: "json", status: "JSON 有效 · 压缩" };
+        if (mode.includes("键排序")) {
+          const sortObj = v => Array.isArray(v) ? v.map(sortObj) : (v && typeof v === "object" ? Object.fromEntries(Object.keys(v).sort().map(k => [k, sortObj(v[k])])) : v);
+          return { text: JSON.stringify(sortObj(obj), null, 2), kind: "json", status: "JSON 有效 · 键排序" };
+        }
+        const spaces = mode.includes("4") ? 4 : 2;
+        return { text: JSON.stringify(obj, null, spaces), kind: "json", status: `JSON 有效 · ${spaces} 空格` };
+      }
+      if (toolId === "json-to-table") {
+        const arr = JSON.parse(text);
+        if (!Array.isArray(arr) || !arr.length || typeof arr[0] !== "object") return { text: "请输入非空 JSON 对象数组", kind: "error", status: "格式不匹配" };
+        const cols = Array.from(new Set(arr.flatMap(r => Object.keys(r || {}))));
+        const csvLines = [cols.join(","), ...arr.map(r => cols.map(c => JSON.stringify(r?.[c] ?? "")).join(","))];
+        if (mode === "导出 CSV") return { text: csvLines.join("\n"), kind: "text", status: `${arr.length} 行 × ${cols.length} 列 · CSV` };
+        return { text: csvLines.join("\n"), kind: "table", columns: cols, rows: arr, status: `${arr.length} 行 × ${cols.length} 列` };
+      }
+      if (toolId === "jwt-debugger") {
+        const parts = text.split(".");
+        if (parts.length !== 3) return { text: "非标准 3 段 JWT", kind: "error", status: "解析失败" };
+        const h = b64DecodeUtf8(parts[0]), p = b64DecodeUtf8(parts[1]);
+        if (!h.ok || !p.ok) return { text: "Base64URL 解码失败", kind: "error", status: "解码错误" };
+        const payloadObj = JSON.parse(p.value), headerObj = JSON.parse(h.value);
+        const expText = payloadObj.exp ? new Date(payloadObj.exp * 1000).toISOString().slice(0, 19) + "Z" : "无 exp";
+        const prettyPayload = JSON.stringify(payloadObj, null, 2);
+        return { text: prettyPayload, kind: "jwt", header: JSON.stringify(headerObj, null, 2), payload: prettyPayload, expText, status: `${headerObj.alg || "?"} · exp ${expText}` };
+      }
+      if (toolId === "base64") {
+        if (mode.includes("解码") || mode.includes("URL-Safe")) {
+          const dec = b64DecodeUtf8(text);
+          return dec.ok ? { text: dec.value, kind: dec.value.trim().startsWith("{") ? "json" : "text", status: `UTF-8 解码 · ${dec.value.length} chars` } : { text: "非法 UTF-8 Base64", kind: "error", status: "解码失败" };
+        }
+        const enc = b64EncodeUtf8(text);
+        return { text: enc, kind: "text", status: `Base64 编码 · ${enc.length} chars` };
+      }
+      if (toolId === "url-parser") {
+        if (mode === "URL 编码") return { text: encodeURIComponent(text), kind: "text", status: "URL 编码" };
+        if (mode === "URL 解码") return { text: decodeURIComponent(text), kind: "text", status: "URL 解码" };
+        const u = new URL(text);
+        const rows = [{ 字段: "Protocol", 值: u.protocol }, { 字段: "Host", 值: u.host }, { 字段: "Path", 值: u.pathname }, ...Array.from(u.searchParams.entries()).map(([k, v]) => ({ 字段: `Query: ${k}`, 值: v }))];
+        return { text: JSON.stringify({ protocol: u.protocol, host: u.host, path: u.pathname, params: Object.fromEntries(u.searchParams.entries()) }, null, 2), kind: "table", columns: ["字段", "值"], rows, status: `${u.searchParams.size} 个 Query 参数` };
+      }
+      if (toolId === "timestamp") {
+        if (/^\d{10,13}$/.test(text)) {
+          const ms = text.length === 13 ? Number(text) : Number(text) * 1000;
+          const d = new Date(ms);
+          return { text: `UTC   : ${d.toISOString()}\nLocal : ${d.toLocaleString("zh-CN")}\nUnix  : ${Math.floor(ms / 1000)}`, kind: "text", status: "已转换" };
+        }
+        const parsed = Date.parse(text);
+        if (!Number.isNaN(parsed)) return { text: `Unix (s)  : ${Math.floor(parsed / 1000)}\nUnix (ms) : ${parsed}`, kind: "text", status: "已转换" };
+        return { text: "无法识别日期或时间戳", kind: "error", status: "解析失败" };
+      }
+      return { text, kind: "text", status: mode };
+    } catch (e) {
+      return { text: `SyntaxError: ${e.message}`, kind: "error", status: "语法异常" };
+    }
+  }
+
+  function createInitialState(variantId = "AB") {
+    const initialClip = CLIPBOARD_PRESETS[0];
+    const initialFavorites = ["json-formatter", "jwt-debugger", "base64", "url-parser", "timestamp"];
+    const initialRecents = ["json-formatter", "base64", "url-parser"];
+    const detection = runSmartDetection(initialClip, { mode: "strict", favorites: initialFavorites, recents: initialRecents });
+    const collapsedCats = Object.fromEntries(CATEGORIES.map(c => [c.id, true]));
+    const prefersLight = typeof window !== "undefined" && window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches;
+    return {
+      variant: variantId,
+      dtTheme: prefersLight ? "light" : "dark",
+      windowSize: "fluid",
+      tabWrap: "wrap", // wrap (多行页签) | single (单行滚动)
+      residency: "Active",
+      sidebarMode: "expanded",
+      flyoutCategory: null,
+      cCatalogTab: "fav",
+      collapsedCats,
+      favorites: initialFavorites,
+      recents: initialRecents,
+      tabs: [
+        { id: "tab-1", toolId: "json-formatter", instanceNum: 1, mode: "美化 · 2 空格", layout: "split-h", splitRatio: 46, input: '{"service":"devtools","offline":true,"v1Tools":28,"residency":["Active","WarmStandby","DeepSleep"]}' },
+        { id: "tab-2", toolId: "json-formatter", instanceNum: 2, mode: "压缩 Minify", layout: "split-h", splitRatio: 46, input: '{\n  "env": "staging",\n  "timeoutMs": 300\n}' },
+        { id: "tab-3", toolId: "base64", instanceNum: 1, mode: "解码", layout: "split-h", splitRatio: 50, input: "eyJ0b29sIjoiRGV2VG9vbHMiLCJ2ZXJzaW9uIjoiVjEifQ==" },
+        { id: "tab-4", toolId: "url-parser", instanceNum: 1, mode: "解析拆解", layout: "split-h", splitRatio: 48, input: "https://api.example.com/v1/search?q=rust+gpui&page=2" },
+        { id: "tab-5", toolId: "timestamp", instanceNum: 1, mode: "时间戳 → 日期", layout: "split-h", splitRatio: 48, input: "1764208473" }
+      ],
+      activeTabId: "tab-1",
+      nextTabSeq: 6,
+      clipboard: { ...initialClip, seq: 1 },
+      dismissedClipSeq: null,
+      selfCopyFingerprint: null,
+      lastCopyExcludedHistory: false,
+      smartResult: detection,
+      paletteOpen: false,
+      paletteQuery: "",
+      paletteIndex: 0,
+      relayMenuOpen: false,
+      focusTarget: "工具主画布",
+      homeQuery: "",
+      keySteps: 0,
+      toast: null,
+      lastTransition: "A+B 融合模式：展开为完整侧边导航，点击左上角折叠钮切为 46px 图标轨 + 浮层抽屉。",
+      evalTab: "scenarios",
+      activeScenario: 0,
+      scenarioInitialized: false,
+      scenarioStep: 0
+    };
+  }
+
+  function makeTab(state, toolId, { input = "", mode = null } = {}) {
+    const tool = TOOL_MAP[toolId];
+    const existingNums = state.tabs.filter(t => t.toolId === toolId).map(t => t.instanceNum);
+    let num = 1;
+    while (existingNums.includes(num)) num++;
+    return { id: `tab-${state.nextTabSeq}`, toolId, instanceNum: num, mode: mode || tool.modes[0], layout: tool.defaultLayout || "split-h", splitRatio: 48, input };
+  }
+
+  function reduce(state, action) {
+    const s = { ...state, toast: null };
+    switch (action.type) {
+      case "SET_VARIANT":
+        return { ...s, variant: action.variant, flyoutCategory: null, relayMenuOpen: false, lastTransition: `切换布局方案 ${action.variant}（${VARIANTS.find(v => v.id === action.variant)?.short}）。` };
+      case "SET_DT_THEME":
+        return { ...s, dtTheme: action.theme };
+      case "SET_WINDOW_SIZE": {
+        const autoSidebar = s.variant === "AB" ? (action.size === "compact" ? "collapsed" : "expanded") : s.sidebarMode;
+        return {
+          ...s,
+          windowSize: action.size,
+          sidebarMode: autoSidebar,
+          flyoutCategory: null,
+          lastTransition: action.size === "compact" && s.variant === "AB"
+            ? "切换至 820px 小窗 → 侧边栏自动折叠为 46px 图标轨（仍可手动展开）。"
+            : `切换窗口尺寸预设：${action.size === "desktop" ? "1160px" : action.size === "compact" ? "820px" : "自适应"}。`
+        };
+      }
+      case "SET_TAB_WRAP":
+        return { ...s, tabWrap: action.mode, lastTransition: `页签排列切换为「${action.mode === "wrap" ? "多行规整换行" : "单行紧凑滚动"}」。` };
+      case "TOGGLE_TAB_WRAP": {
+        const next = s.tabWrap === "wrap" ? "single" : "wrap";
+        return { ...s, tabWrap: next, lastTransition: `页签排列切换为「${next === "wrap" ? "多行规整换行" : "单行紧凑滚动"}」。` };
+      }
+      case "SET_EVAL_TAB":
+        return { ...s, evalTab: action.tab };
+      case "TOGGLE_SIDEBAR": {
+        const next = s.sidebarMode === "expanded" ? "collapsed" : "expanded";
+        return {
+          ...s,
+          sidebarMode: next,
+          flyoutCategory: null,
+          lastTransition: next === "collapsed"
+            ? "侧边栏折叠为 46px 图标轨（点击分类图标以浮层抽屉展开，零挤压画布）。"
+            : "侧边栏展开为 196px 完整导航树。"
+        };
+      }
+      case "TOGGLE_CAT":
+        return { ...s, collapsedCats: { ...s.collapsedCats, [action.catId]: !s.collapsedCats[action.catId] } };
+      case "SET_FLYOUT":
+        return { ...s, flyoutCategory: s.flyoutCategory === action.catId ? null : action.catId, focusTarget: action.catId ? "分类抽屉" : "工具主画布" };
+      case "SET_C_CATALOG_TAB":
+        return { ...s, cCatalogTab: action.tab };
+      case "SET_CLIPBOARD": {
+        const nextSeq = s.clipboard.seq + 1;
+        const nextClip = { ...action.preset, seq: nextSeq };
+        const active = s.residency === "Active";
+        const detection = active
+          ? runSmartDetection(nextClip, { mode: "strict", favorites: s.favorites, recents: s.recents })
+          : { skipped: true, reason: "后台零轮询，等待下次唤起获焦触发。", matches: [], suppressed: [], recommendations: [] };
+        return { ...s, clipboard: nextClip, dismissedClipSeq: null, smartResult: detection, lastTransition: active ? `剪贴板更新为「${action.preset.label}」→ 获焦识别已更新。` : `剪贴板更新为「${action.preset.label}」→ 后台零轮询。` };
+      }
+      case "SMART_TOGGLE": {
+        if (s.residency === "Active") {
+          return { ...s, residency: "WarmStandby", paletteOpen: false, relayMenuOpen: false, flyoutCategory: null, focusTarget: "系统托盘热待机", keySteps: s.keySteps + 1, lastTransition: `收起到托盘（Warm Standby），保留 ${s.tabs.length} 个标签页。` };
+        }
+        const isSelfCopy = s.selfCopyFingerprint && s.selfCopyFingerprint === s.clipboard.text;
+        const isDeduped = s.dismissedClipSeq === s.clipboard.seq;
+        let smartResult = s.smartResult, note = "";
+        if (isSelfCopy) {
+          smartResult = { skipped: true, guard: "SELF_COPY_SUPPRESSED", reason: "命中自我复制抑制指纹，跳过自推。", matches: [], suppressed: [], recommendations: [] };
+          note = "命中自我复制抑制";
+        } else if (isDeduped) {
+          note = "剪贴板指纹未变化";
+        } else {
+          smartResult = runSmartDetection(s.clipboard, { mode: "strict", favorites: s.favorites, recents: s.recents });
+          note = smartResult.skipped ? smartResult.reason : `命中 ${smartResult.primaryLabel}`;
+        }
+        const openPalette = Boolean(action.openPalette);
+        return {
+          ...s, residency: "Active", smartResult, paletteOpen: openPalette, paletteQuery: "", paletteIndex: 0,
+          focusTarget: openPalette ? "快速命令面板" : (s.activeTabId ? "工具主画布" : "工作台首页"),
+          keySteps: action.resetSteps ? 1 : s.keySteps + 1,
+          lastTransition: `唤起主工作台（恢复 ${s.tabs.length} 个标签页）→ ${note}。`
+        };
+      }
+      case "ADVANCE_DEEP_SLEEP":
+        return s.residency === "WarmStandby" ? { ...s, residency: "DeepSleep", focusTarget: "深休眠 Headless", lastTransition: "热待机满 60 秒 → 切入深休眠（Deep Sleep / Headless）。" } : s;
+      case "EXPLICIT_SMART_PASTE": {
+        if (s.residency !== "Active") return s;
+        const detection = runSmartDetection(s.clipboard, { mode: "strict", favorites: s.favorites, recents: s.recents });
+        return { ...s, dismissedClipSeq: null, smartResult: detection, keySteps: s.keySteps + 1, toast: detection.skipped ? detection.reason : `智能粘贴命中 ${detection.primaryLabel}`, lastTransition: `显式智能粘贴（Ctrl+Shift+V）→ ${detection.skipped ? detection.reason : `命中 ${detection.primaryLabel}`}。` };
+      }
+      case "DISMISS_SMART_BANNER":
+        return { ...s, dismissedClipSeq: s.clipboard.seq, lastTransition: "已关闭提示条并记录剪贴板指纹。" };
+      case "OPEN_TOOL": {
+        const { toolId, payload = null, autoMode = null, forceNew = false, source = "nav" } = action;
+        const tool = TOOL_MAP[toolId];
+        if (!tool) return s;
+        const existingTabs = s.tabs.filter(t => t.toolId === toolId);
+        let targetTab = null, tabs = [...s.tabs], nextTabSeq = s.nextTabSeq, reason = "", antiOverwrite = false;
+
+        if (forceNew) {
+          targetTab = makeTab(s, toolId, { input: payload ?? "", mode: autoMode });
+          tabs.push(targetTab); nextTabSeq++;
+          reason = `多开「${tool.name} #${targetTab.instanceNum}」`;
+        } else if (payload !== null) {
+          const reusable = existingTabs.find(t => !t.input.trim() || t.input.trim() === payload.trim());
+          if (reusable) {
+            targetTab = { ...reusable, input: payload, mode: autoMode || reusable.mode };
+            tabs = tabs.map(t => (t.id === reusable.id ? targetTab : t));
+            reason = `复用空标签「${tool.name}」并注入数据`;
+          } else {
+            targetTab = makeTab(s, toolId, { input: payload, mode: autoMode });
+            tabs.push(targetTab); nextTabSeq++;
+            antiOverwrite = existingTabs.length > 0;
+            reason = antiOverwrite ? `防覆盖生效：新开「${tool.name} #${targetTab.instanceNum}」` : `打开「${tool.name}」并自动预填`;
+          }
+        } else if (existingTabs.length > 0) {
+          targetTab = existingTabs[0];
+          reason = `切换至已有标签「${tool.name}」`;
+        } else {
+          targetTab = makeTab(s, toolId, { input: "", mode: autoMode });
+          tabs.push(targetTab); nextTabSeq++;
+          reason = `打开「${tool.name}」`;
+        }
+
+        const recents = [toolId, ...s.recents.filter(id => id !== toolId)].slice(0, 5);
+        return {
+          ...s, tabs, activeTabId: targetTab.id, nextTabSeq, recents,
+          dismissedClipSeq: source === "smart" ? s.clipboard.seq : s.dismissedClipSeq,
+          paletteOpen: false, relayMenuOpen: false, flyoutCategory: null,
+          focusTarget: "编辑器输入区", keySteps: s.keySteps + 1,
+          toast: source === "relay" ? `工具接力 → ${tool.name}` : antiOverwrite ? `防覆盖：已新开「${tool.name} #${targetTab.instanceNum}」` : null,
+          lastTransition: `${reason}。`
+        };
+      }
+      case "SELECT_TAB":
+        return { ...s, activeTabId: action.tabId, relayMenuOpen: false, focusTarget: action.tabId ? "工具主画布" : "工作台首页" };
+      case "CLOSE_TAB": {
+        const idx = s.tabs.findIndex(t => t.id === action.tabId);
+        if (idx === -1) return s;
+        const closed = s.tabs[idx];
+        const tabs = s.tabs.filter(t => t.id !== action.tabId);
+        let activeTabId = s.activeTabId;
+        if (s.activeTabId === action.tabId) activeTabId = tabs.length > 0 ? tabs[Math.min(idx, tabs.length - 1)].id : null;
+        return { ...s, tabs, activeTabId, relayMenuOpen: false, keySteps: s.keySteps + 1, focusTarget: activeTabId ? "工具主画布" : "工作台首页", lastTransition: tabs.length === 0 ? "关闭最后标签 → 保留窗口并回工作台首页。" : `关闭「${TOOL_MAP[closed.toolId].name} #${closed.instanceNum}」。` };
+      }
+      case "UPDATE_TAB_INPUT":
+        return { ...s, tabs: s.tabs.map(t => t.id === action.tabId ? { ...t, input: action.input } : t), focusTarget: "编辑器输入区" };
+      case "UPDATE_TAB_MODE":
+        return { ...s, tabs: s.tabs.map(t => t.id === action.tabId ? { ...t, mode: action.mode } : t) };
+      case "CYCLE_TAB_LAYOUT": {
+        const order = ["split-h", "split-v", "single"];
+        return { ...s, tabs: s.tabs.map(t => t.id === action.tabId ? { ...t, layout: order[(order.indexOf(t.layout || "split-h") + 1) % 3] } : t) };
+      }
+      case "UPDATE_SPLIT_RATIO":
+        return { ...s, tabs: s.tabs.map(t => t.id === action.tabId ? { ...t, splitRatio: Math.max(25, Math.min(75, action.ratio)) } : t) };
+      case "TOGGLE_FAVORITE": {
+        const exists = s.favorites.includes(action.toolId);
+        return { ...s, favorites: exists ? s.favorites.filter(id => id !== action.toolId) : [...s.favorites, action.toolId] };
+      }
+      case "OPEN_PALETTE":
+        return { ...s, residency: "Active", paletteOpen: true, paletteQuery: action.query || "", paletteIndex: 0, relayMenuOpen: false, flyoutCategory: null, focusTarget: "快速命令面板", keySteps: s.keySteps + 1, lastTransition: "打开快速命令面板（Ctrl+K）。" };
+      case "UPDATE_PALETTE_QUERY":
+        return { ...s, paletteQuery: action.query, paletteIndex: 0 };
+      case "MOVE_PALETTE_INDEX":
+        return { ...s, paletteIndex: Math.max(0, action.index) };
+      case "TOGGLE_RELAY_MENU":
+        return { ...s, relayMenuOpen: !s.relayMenuOpen };
+      case "COPY_OUTPUT": {
+        const tab = s.tabs.find(t => t.id === s.activeTabId);
+        const tool = tab ? TOOL_MAP[tab.toolId] : null;
+        const sensitive = Boolean(tool?.sensitiveOutput);
+        const nextSeq = s.clipboard.seq + 1;
+        const base = {
+          ...s,
+          clipboard: { id: "self", label: `DevTools 输出 (${tool?.name || ""})`, kind: "Text", concealed: false, text: action.text, seq: nextSeq },
+          selfCopyFingerprint: action.text, lastCopyExcludedHistory: sensitive, dismissedClipSeq: nextSeq,
+          keySteps: s.keySteps + 1,
+          toast: sensitive ? "已复制（排除剪贴板历史 + 自我复制抑制）" : "已复制（自我复制抑制生效）"
+        };
+        if (action.andDismiss) return { ...base, residency: "WarmStandby", focusTarget: "系统托盘热待机", lastTransition: `复制结果并收起到托盘（本轮闭环 ${base.keySteps} 步）。` };
+        return { ...base, lastTransition: "已复制输出（自我复制抑制生效）。" };
+      }
+      case "HANDLE_ESC": {
+        if (s.residency !== "Active") return s;
+        if (s.paletteOpen) return { ...s, paletteOpen: false, focusTarget: s.activeTabId ? "工具主画布" : "工作台首页", keySteps: s.keySteps + 1, lastTransition: "Esc 第 1 层：关闭命令面板。" };
+        if (s.relayMenuOpen) return { ...s, relayMenuOpen: false, keySteps: s.keySteps + 1, lastTransition: "Esc 第 1 层：关闭工具接力菜单。" };
+        if (s.flyoutCategory) return { ...s, flyoutCategory: null, keySteps: s.keySteps + 1, lastTransition: "Esc 第 1 层：收起侧边抽屉。" };
+        if (s.focusTarget === "编辑器输入区" || (s.homeQuery && !s.activeTabId)) return { ...s, homeQuery: "", focusTarget: s.activeTabId ? "工具主画布" : "工作台首页", keySteps: s.keySteps + 1, lastTransition: "Esc 第 2 层：退出输入焦点。" };
+        return { ...s, residency: "WarmStandby", focusTarget: "系统托盘热待机", keySteps: s.keySteps + 1, lastTransition: "Esc 第 3 层：收起到托盘。" };
+      }
+      case "SET_HOME_QUERY":
+        return { ...s, homeQuery: action.query, focusTarget: "工作台首页搜索框" };
+      case "SET_SCENARIO_STEP":
+        return { ...s, scenarioStep: action.step };
+      case "RESET_FOR_SCENARIO": {
+        const fresh = createInitialState(s.variant);
+        return { ...fresh, dtTheme: s.dtTheme, windowSize: s.windowSize, tabWrap: s.tabWrap, evalTab: s.evalTab, activeScenario: action.scenarioIndex, scenarioInitialized: true, scenarioStep: 0, ...action.patch };
+      }
+      default: return s;
+    }
+  }
+
+  return { VARIANTS, CATEGORIES, TOOLS, TOOL_MAP, CLIPBOARD_PRESETS, runSmartDetection, fuzzyScore, computeToolOutput, createInitialState, reduce };
+})();
+
+/* ============================================================================
+   PART 2 — GUIDED WALKTHROUGH SCENARIOS
+   ============================================================================ */
+const SCENARIOS = [
+  {
+    title: "1. 唤醒闭环",
+    setup: () => ({ residency: "WarmStandby", tabs: [], activeTabId: null, keySteps: 0, clipboard: { ...DevToolsCore.CLIPBOARD_PRESETS[0], seq: 10 }, dismissedClipSeq: null, selfCopyFingerprint: null, smartResult: { skipped: true, reason: "后台零轮询", matches: [], suppressed: [], recommendations: [] }, focusTarget: "系统托盘热待机", lastTransition: "剧本 1 就绪：托盘热待机中，剪贴板已复制 JWT。" }),
+    steps: [
+      { label: "热键唤起主工作台", run: d => d({ type: "SMART_TOGGLE", resetSteps: true }) },
+      { label: "直达 JWT 解析与签发", run: (d, st) => { const r = st.smartResult.recommendations[0]; if (r) d({ type: "OPEN_TOOL", toolId: r.toolId, payload: st.clipboard.text, autoMode: r.autoMode, source: "smart" }); } },
+      { label: "复制并收起到托盘", run: (d, st) => { const tab = st.tabs.find(t => t.id === st.activeTabId); const out = tab ? DevToolsCore.computeToolOutput(tab.toolId, tab.mode, tab.input).text : ""; d({ type: "COPY_OUTPUT", text: out, andDismiss: true }); } },
+      { label: "再唤起（验证零自推）", run: d => d({ type: "SMART_TOGGLE" }) }
+    ]
+  },
+  {
+    title: "2. 防覆盖多开",
+    setup: () => ({ residency: "Active", tabs: [{ id: "tab-1", toolId: "json-formatter", instanceNum: 1, mode: "美化 · 2 空格", layout: "split-h", splitRatio: 46, input: '{"user":"Alice","env":"prod"}' }], activeTabId: "tab-1", nextTabSeq: 2, keySteps: 0, clipboard: { ...DevToolsCore.CLIPBOARD_PRESETS[1], seq: 20 }, dismissedClipSeq: null, smartResult: DevToolsCore.runSmartDetection(DevToolsCore.CLIPBOARD_PRESETS[1], { mode: "strict", favorites: ["json-formatter"], recents: [] }), focusTarget: "编辑器输入区", lastTransition: "剧本 2 就绪：JSON #1 含数据，剪贴板新复制 JSON 数组。" }),
+    steps: [
+      { label: "点推荐打开 JSON（开 #2）", run: (d, st) => d({ type: "OPEN_TOOL", toolId: "json-formatter", payload: st.clipboard.text, autoMode: "美化 · 2 空格", source: "smart" }) },
+      { label: "点首推 JSON 转表格", run: (d, st) => d({ type: "OPEN_TOOL", toolId: "json-to-table", payload: st.clipboard.text, autoMode: "交互表格", source: "smart" }) },
+      { label: "切回 #1 验证未覆盖", run: (d, st) => { const t1 = st.tabs.find(t => t.toolId === "json-formatter" && t.instanceNum === 1); if (t1) d({ type: "SELECT_TAB", tabId: t1.id }); } },
+      { label: "切方案 C 看垂直标签", run: d => d({ type: "SET_VARIANT", variant: "C" }) }
+    ]
+  },
+  {
+    title: "3. 接力与 Esc",
+    setup: () => ({ residency: "Active", tabs: [], activeTabId: null, keySteps: 0, clipboard: { ...DevToolsCore.CLIPBOARD_PRESETS[3], seq: 30 }, dismissedClipSeq: null, smartResult: DevToolsCore.runSmartDetection(DevToolsCore.CLIPBOARD_PRESETS[3], { mode: "strict", favorites: ["base64"], recents: [] }), focusTarget: "工作台首页", lastTransition: "剧本 3 就绪：剪贴板含 Base64 编码的 JWT。" }),
+    steps: [
+      { label: "Ctrl+K 缩写搜 b64", run: d => d({ type: "OPEN_PALETTE", query: "b64" }) },
+      { label: "自动解码 Base64", run: (d, st) => d({ type: "OPEN_TOOL", toolId: "base64", payload: st.clipboard.text, autoMode: "解码", source: "smart" }) },
+      { label: "单跳接力至 JWT 解析", run: (d, st) => { const tab = st.tabs.find(t => t.id === st.activeTabId); const out = tab ? DevToolsCore.computeToolOutput(tab.toolId, tab.mode, tab.input).text : ""; d({ type: "OPEN_TOOL", toolId: "jwt-debugger", payload: out, autoMode: "解析验签", source: "relay" }); } },
+      { label: "连按两次 Esc 收起", run: d => { d({ type: "HANDLE_ESC" }); d({ type: "HANDLE_ESC" }); } }
+    ]
+  },
+  {
+    title: "4. 隐私与休眠",
+    setup: () => ({ residency: "Active", tabs: [{ id: "tab-1", toolId: "url-parser", instanceNum: 1, mode: "解析拆解", layout: "split-h", splitRatio: 46, input: DevToolsCore.TOOL_MAP["url-parser"].sample }], activeTabId: "tab-1", nextTabSeq: 2, keySteps: 0, clipboard: { ...DevToolsCore.CLIPBOARD_PRESETS[2], seq: 40 }, dismissedClipSeq: null, smartResult: DevToolsCore.runSmartDetection(DevToolsCore.CLIPBOARD_PRESETS[2], { mode: "strict" }), focusTarget: "工具主画布", lastTransition: "剧本 4 就绪：当前打开 1 个 URL 标签页。" }),
+    steps: [
+      { label: "1Password 零读取跳过", run: d => d({ type: "SET_CLIPBOARD", preset: DevToolsCore.CLIPBOARD_PRESETS[4] }) },
+      { label: "SSH 私钥静默拦截", run: d => d({ type: "SET_CLIPBOARD", preset: DevToolsCore.CLIPBOARD_PRESETS[5] }) },
+      { label: "Ctrl+W 关末标签回首页", run: (d, st) => { if (st.activeTabId) d({ type: "CLOSE_TAB", tabId: st.activeTabId }); } },
+      { label: "收起 → 60s 进深休眠", run: d => { d({ type: "SMART_TOGGLE" }); d({ type: "ADVANCE_DEEP_SLEEP" }); } }
+    ]
+  }
+];
+
+/* ============================================================================
+   PART 3 — RENDERER
+   ============================================================================ */
+function getInitialVariantFromUrl() {
+  try {
+    const p = new URLSearchParams(window.location.search).get("variant");
+    if (p && ["AB", "A", "B", "C"].includes(p.toUpperCase())) return p.toUpperCase();
+  } catch {}
+  return "AB";
+}
+function syncVariantToUrl(v) {
+  try { const u = new URL(window.location.href); u.searchParams.set("variant", v); window.history.replaceState(null, "", u.toString()); } catch {}
+}
+
+let state = DevToolsCore.createInitialState(getInitialVariantFromUrl());
+function dispatch(action) { state = DevToolsCore.reduce(state, action); if (action.type === "SET_VARIANT") syncVariantToUrl(action.variant); render(); }
+
+function escHtml(str) { return String(str ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;"); }
+function highlightJson(str) {
+  return escHtml(str).replace(/(&quot;(\\.|[^&]|&(?!quot;))*&quot;)(\s*:)?|\b(true|false|null)\b|-?\d+(?:\.\d*)?(?:[eE][+\-]?\d+)?/g, (m, qStr, _g2, colon, bool) => {
+    if (qStr) return colon ? `<span class="syn-k">${qStr}</span>${colon}` : `<span class="syn-s">${qStr}</span>`;
+    if (bool) return `<span class="syn-b">${m}</span>`;
+    return `<span class="syn-n">${m}</span>`;
+  });
+}
+function renderGutter(text) { return Array.from({ length: Math.max(1, (text || "").split("\n").length) }, (_, i) => i + 1).join("<br>"); }
+function getSmartHitSet(st) { return (!st.smartResult || st.smartResult.skipped) ? new Set() : new Set(st.smartResult.recommendations.map(r => r.toolId)); }
+function isSmartBannerVisible(st) { return st.residency === "Active" && st.smartResult && !st.smartResult.skipped && st.smartResult.recommendations.length > 0 && st.dismissedClipSeq !== st.clipboard.seq; }
+function getDuplicateToolSet(st) { const c = {}; st.tabs.forEach(t => (c[t.toolId] = (c[t.toolId] || 0) + 1)); return new Set(Object.keys(c).filter(k => c[k] > 1)); }
+function tabSnippet(tab) { const c = (tab.input || "").replace(/\s+/g, " ").trim(); return !c ? "空" : (c.length > 18 ? c.slice(0, 18) + "…" : c); }
+
+function getPaletteItems(st) {
+  const q = st.paletteQuery.trim(), items = [];
+  if (!q) {
+    if (st.smartResult && !st.smartResult.skipped) {
+      for (const r of st.smartResult.recommendations.slice(0, 5)) items.push({ group: `智能识别 · ${r.dataLabel}`, tool: DevToolsCore.TOOL_MAP[r.toolId], smartRec: r });
+    }
+    for (const id of st.recents) if (!items.some(i => i.tool.id === id)) items.push({ group: "最近使用", tool: DevToolsCore.TOOL_MAP[id] });
+    for (const id of st.favorites) if (!items.some(i => i.tool.id === id)) items.push({ group: "收藏", tool: DevToolsCore.TOOL_MAP[id] });
+    return items;
+  }
+  const smartMap = new Map((st.smartResult?.recommendations || []).map(r => [r.toolId, r]));
+  return DevToolsCore.TOOLS.map(tool => ({ tool, score: DevToolsCore.fuzzyScore(q, tool) })).filter(x => x.score > 0).sort((a, b) => b.score - a.score).slice(0, 10).map(x => ({ group: "匹配工具", tool: x.tool, smartRec: smartMap.get(x.tool.id) || null }));
+}
+
+function renderSmartRecButtons(st, max = 2) {
+  return st.smartResult.recommendations.slice(0, max).map(r => {
+    const t = DevToolsCore.TOOL_MAP[r.toolId];
+    return `<button class="dt-btn" data-action="smart-open" data-tool="${t.id}" data-mode="${escHtml(r.autoMode)}">${escHtml(t.name)}</button>`;
+  }).join("");
+}
+
+function renderHomeView(st) {
+  const hitSet = getSmartHitSet(st);
+  const q = st.homeQuery.trim().toLowerCase();
+  const list = q ? DevToolsCore.TOOLS.filter(t => DevToolsCore.fuzzyScore(q, t) > 0) : st.favorites.map(id => DevToolsCore.TOOL_MAP[id]).filter(Boolean);
+  const primaryRec = !st.smartResult.skipped && st.smartResult.recommendations[0];
+  return `
+    <div class="home-view">
+      <div class="home-search-box">
+        <span style="color:var(--dt-fg-subtle);">${icon("search")}</span>
+        <input id="home-search-input" type="text" value="${escHtml(st.homeQuery)}" placeholder="搜索 28 个离线工具（b64 / jwt / ts / json），或 Ctrl+V 智能粘贴…" />
+        <span class="key-hint">Ctrl+K</span>
+      </div>
+      ${primaryRec && st.dismissedClipSeq !== st.clipboard.seq ? `
+        <div class="home-smart-row">
+          <div style="display:flex;align-items:center;gap:8px;min-width:0;">
+            <span class="smart-tag"><span class="smart-dot"></span>${escHtml(st.smartResult.primaryLabel)}</span>
+            <span class="smart-preview">${escHtml(st.smartResult.redactedPreview)}</span>
+          </div>
+          <div style="display:flex;gap:5px;">${renderSmartRecButtons(st, 2)}</div>
+        </div>
+      ` : ""}
+      <div>
+        <div style="font-size:11.5px;color:var(--dt-fg-subtle);margin-bottom:8px;">${q ? `匹配结果（${list.length}）` : "常用工具"}</div>
+        <div class="home-grid">
+          ${list.map(t => `
+            <button class="tool-card" data-action="open-tool" data-tool="${t.id}">
+              <div class="tool-card-title">${icon(t.icon, true)}<span>${escHtml(t.name)}</span>${hitSet.has(t.id) ? '<span class="smart-dot" style="margin-left:auto;"></span>' : ""}</div>
+              <div class="tool-card-sub">${escHtml(t.en)}</div>
+            </button>
+          `).join("")}
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function renderOutputBody(res) {
+  if (res.kind === "table") {
+    return `<table class="mini-table"><thead><tr>${res.columns.map(c => `<th>${escHtml(c)}</th>`).join("")}</tr></thead><tbody>${res.rows.map(r => `<tr>${res.columns.map(c => `<td>${escHtml(r[c] ?? "")}</td>`).join("")}</tr>`).join("")}</tbody></table>`;
+  }
+  if (res.kind === "jwt") {
+    return `<div style="display:flex;flex-direction:column;gap:12px;"><div><div style="font-size:10.5px;color:var(--dt-fg-subtle);margin-bottom:4px;">HEADER</div><div>${highlightJson(res.header)}</div></div><div style="border-top:1px solid var(--dt-border);padding-top:10px;"><div style="font-size:10.5px;color:var(--dt-fg-subtle);margin-bottom:4px;">PAYLOAD</div><div>${highlightJson(res.payload)}</div></div></div>`;
+  }
+  if (res.kind === "error") return `<div style="color:var(--dt-err);">${escHtml(res.text)}</div>`;
+  if (res.kind === "json") return highlightJson(res.text);
+  return escHtml(res.text || "");
+}
+
+function renderToolView(st, tab) {
+  const tool = DevToolsCore.TOOL_MAP[tab.toolId];
+  const dups = getDuplicateToolSet(st);
+  const isFav = st.favorites.includes(tool.id);
+  const res = DevToolsCore.computeToolOutput(tool.id, tab.mode, tab.input);
+  const relayDetection = res.text && res.kind !== "error"
+    ? DevToolsCore.runSmartDetection({ kind: "Text", text: res.text, concealed: false }, { mode: "relay", excludeToolId: tool.id, favorites: st.favorites, recents: st.recents })
+    : { recommendations: [] };
+
+  const layout = tab.layout || "split-h";
+  const layoutIcon = layout === "split-h" ? "splitH" : layout === "split-v" ? "splitV" : "single";
+  const ratio = tab.splitRatio || 48;
+  const pane1Style = layout === "single" ? "flex:1;" : `flex: 0 0 calc(${ratio}% - 1px);`;
+  const pane2Style = layout === "single" ? "flex:1;" : `flex: 1 1 0;`;
+  const showOutGutter = res.kind === "json" || res.kind === "text";
+
+  return `
+    <div class="tool-header">
+      <div class="tool-header-left">
+        <span class="tool-title">${escHtml(tool.name)}${dups.has(tool.id) ? ` <span class="tab-num">#${tab.instanceNum}</span>` : ""}</span>
+        <select class="dt-select" id="tool-mode-select" data-tab="${tab.id}" title="运行模式">
+          ${tool.modes.map(m => `<option value="${escHtml(m)}" ${tab.mode === m ? "selected" : ""}>${escHtml(m)}</option>`).join("")}
+        </select>
+      </div>
+      <div class="tool-header-right">
+        <button class="dt-btn ghost icon-only" data-action="cycle-layout" data-tab="${tab.id}" title="切换分栏方向（左右 / 上下 / 单栏）">${icon(layoutIcon, true)}</button>
+        <button class="dt-btn ghost icon-only" data-action="dup-tool" data-tool="${tool.id}" title="多开独立实例">${icon("plus", true)}</button>
+        <button class="dt-btn ghost icon-only" data-action="toggle-fav" data-tool="${tool.id}" title="${isFav ? "取消收藏" : "收藏"}" style="${isFav ? "color:var(--dt-warn);" : ""}">${icon("star", true)}</button>
+        <button class="dt-btn ghost ${st.relayMenuOpen ? "active" : ""}" data-action="toggle-relay" ${!res.text || res.kind === "error" ? "disabled" : ""} title="工具接力（单跳传递至兼容工具）">${icon("send", true)}发送到</button>
+        <button class="dt-btn primary" data-action="copy-dismiss" ${!res.text ? "disabled" : ""} title="复制结果并立刻收起到托盘">复制并收起</button>
+        ${st.relayMenuOpen ? `
+          <div class="relay-menu">
+            <div class="relay-header">工具接力（单跳传递）</div>
+            ${relayDetection.recommendations.slice(0, 5).map(r => {
+              const rt = DevToolsCore.TOOL_MAP[r.toolId];
+              return `<button class="nav-item" data-action="relay-send" data-tool="${rt.id}" data-mode="${escHtml(r.autoMode)}">${icon(rt.icon, true)}<span class="nav-name">${escHtml(rt.name)}</span><span class="key-hint">${escHtml(r.dataLabel)}</span></button>`;
+            }).join("")}
+          </div>
+        ` : ""}
+      </div>
+    </div>
+
+    <div class="tool-canvas ${layout}" data-canvas-tab="${tab.id}">
+      <div class="pane" style="${pane1Style}">
+        <div class="pane-label-row">
+          <span>输入</span>
+          <span class="pane-mini-actions">
+            <button class="text-link" data-action="fill-sample" data-tab="${tab.id}">示例</button>
+            <button class="text-link" data-action="clear-input" data-tab="${tab.id}">清空</button>
+          </span>
+        </div>
+        <div class="code-wrap">
+          <div class="line-gutter">${renderGutter(tab.input)}</div>
+          <textarea class="pane-editor" id="active-tool-input" data-tab="${tab.id}" spellcheck="false" placeholder="输入或粘贴内容…">${escHtml(tab.input)}</textarea>
+        </div>
+      </div>
+
+      ${layout !== "single" ? `<div class="split-handle" data-split-handle="${tab.id}" title="拖拽调整比例"></div>` : ""}
+
+      <div class="pane" style="${pane2Style}">
+        <div class="pane-label-row">
+          <span>输出${tool.sensitiveOutput ? " · 敏感" : ""}</span>
+          <span class="pane-mini-actions">
+            <button class="text-link" data-action="copy-out" ${!res.text ? "disabled" : ""}>复制</button>
+          </span>
+        </div>
+        <div class="code-wrap">
+          ${showOutGutter && res.text ? `<div class="line-gutter">${renderGutter(res.text)}</div>` : ""}
+          <div class="pane-output">${renderOutputBody(res)}</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="dt-footer">
+      <span class="footer-ok"><span class="ok-dot ${res.kind === "error" ? "err" : ""}"></span>${escHtml(res.status)} · ${tab.input.length} chars</span>
+      <span>${tool.sensitiveOutput ? "纯离线 · 复制排除历史" : "纯离线 · 仅内存态"}</span>
+    </div>
+  `;
+}
+
+function renderSidebarNavItems(st, compactIconOnly = false) {
+  const hitSet = getSmartHitSet(st);
+  const activeTab = st.tabs.find(t => t.id === st.activeTabId);
+  const activeToolId = activeTab ? activeTab.toolId : null;
+
+  if (compactIconOnly) {
+    return `
+      <button class="b-rail-btn ${!st.activeTabId ? "active" : ""}" data-action="go-home" title="工作台首页">${icon("home")}</button>
+      <div style="width:18px;height:1px;background:var(--dt-border);margin:2px 0;"></div>
+      ${st.favorites.map(id => {
+        const t = DevToolsCore.TOOL_MAP[id];
+        return `<button class="b-rail-btn ${activeToolId === id ? "active" : ""}" data-action="open-tool" data-tool="${id}" title="${escHtml(t.name)}">${icon(t.icon)}${hitSet.has(id) ? '<span class="b-rail-dot"></span>' : ""}</button>`;
+      }).join("")}
+    `;
+  }
+
+  return `
+    <button class="nav-item ${!st.activeTabId ? "active" : ""}" data-action="go-home">${icon("home", true)}<span class="nav-name">工作台首页</span></button>
+
+    <div class="nav-head"><span>收藏</span></div>
+    ${st.favorites.map(id => {
+      const t = DevToolsCore.TOOL_MAP[id];
+      return `<button class="nav-item ${activeToolId === id ? "active" : ""} ${hitSet.has(id) ? "smart-hit" : ""}" data-action="open-tool" data-tool="${id}">${icon(t.icon, true)}<span class="nav-name">${escHtml(t.name)}</span>${hitSet.has(id) ? '<span class="smart-dot"></span>' : ""}</button>`;
+    }).join("")}
+
+    <div class="nav-head"><span>全部分类</span><span>28</span></div>
+    ${DevToolsCore.CATEGORIES.map(cat => {
+      const catTools = DevToolsCore.TOOLS.filter(t => t.cat === cat.id);
+      const collapsed = Boolean(st.collapsedCats[cat.id]);
+      const hasHit = catTools.some(t => hitSet.has(t.id));
+      return `
+        <button class="nav-item" data-action="toggle-cat" data-cat="${cat.id}">
+          ${icon(collapsed ? "chevRight" : "chevDown", true)}
+          <span class="nav-name">${escHtml(cat.name)}</span>
+          ${hasHit ? '<span class="smart-dot"></span>' : `<span class="key-hint">${catTools.length}</span>`}
+        </button>
+        ${!collapsed ? catTools.map(t => `
+          <button class="nav-item ${activeToolId === t.id ? "active" : ""} ${hitSet.has(t.id) ? "smart-hit" : ""}" style="padding-left:24px;" data-action="open-tool" data-tool="${t.id}">
+            <span class="nav-name">${escHtml(t.name)}</span>
+            ${hitSet.has(t.id) ? '<span class="smart-dot"></span>' : ""}
+          </button>
+        `).join("") : ""}
+      `;
+    }).join("")}
+  `;
+}
+
+function renderTabItems(st, richSnippet = false) {
+  const dups = getDuplicateToolSet(st);
+  const cls = st.tabWrap === "wrap" ? "multi-row" : "single-row";
+  return `
+    <div class="h-tabs ${cls}">
+      ${st.tabs.map(tab => {
+        const t = DevToolsCore.TOOL_MAP[tab.toolId];
+        const isActive = st.activeTabId === tab.id;
+        return `
+          <div class="h-tab ${isActive ? "active" : ""} ${richSnippet ? "rich" : ""}" data-action="select-tab" data-tab="${tab.id}" title="${escHtml(t.name)} #${tab.instanceNum} · ${escHtml(tabSnippet(tab))}">
+            <span class="h-tab-text">
+              <span>${escHtml(t.name)}</span>
+              ${dups.has(tab.toolId) ? `<span class="tab-num">#${tab.instanceNum}</span>` : ""}
+              ${richSnippet ? `<span class="h-tab-snippet">${escHtml(tabSnippet(tab))}</span>` : ""}
+            </span>
+            ${tab.input.trim() ? '<span class="tab-dirty"></span>' : ""}
+            <button class="tab-close" data-action="close-tab" data-tab="${tab.id}" title="关闭">${icon("close", true)}</button>
+          </div>
+        `;
+      }).join("")}
+    </div>
+  `;
+}
+
+function renderTabTrailing(st) {
+  const isWrap = st.tabWrap === "wrap";
+  return `
+    <div class="tab-trailing">
+      <button class="dt-btn ghost icon-only" data-action="open-palette" title="新建标签 / 命令面板 (Ctrl+K)">${icon("plus", true)}</button>
+      <button class="dt-btn ghost icon-only ${isWrap ? "active" : ""}" data-action="toggle-tab-wrap" title="${isWrap ? "当前：多行规整页签（点击切单行滚动）" : "当前：单行紧凑滚动（点击切多行换行）"}">${icon(isWrap ? "rows" : "oneRow", true)}</button>
+    </div>
+  `;
+}
+
+function renderWinControls() {
+  return `<div class="win-controls"><button class="win-ctrl" data-action="toast-min" title="最小化">${icon("min", true)}</button><button class="win-ctrl" data-action="toggle-size" title="切换尺寸">${icon("max", true)}</button><button class="win-ctrl close" data-action="smart-toggle" title="收起到托盘">${icon("close", true)}</button></div>`;
+}
+
+function renderVariantAB(st) {
+  const activeTab = st.tabs.find(t => t.id === st.activeTabId);
+  const hitSet = getSmartHitSet(st);
+  const showBanner = isSmartBannerVisible(st) && Boolean(activeTab);
+  const isWrap = st.tabWrap === "wrap";
+  const isCollapsed = st.sidebarMode === "collapsed";
+  const flyoutTools = st.flyoutCategory === "fav"
+    ? st.favorites.map(id => DevToolsCore.TOOL_MAP[id])
+    : DevToolsCore.TOOLS.filter(t => t.cat === st.flyoutCategory);
+
+  return `
+    <div class="dt-titlebar">
+      <button class="dt-btn ghost icon-only ${isCollapsed ? "active" : ""}" data-action="toggle-sidebar" title="${isCollapsed ? "展开完整侧边栏" : "折叠为 46px 图标轨 + 浮层抽屉"}">${icon("sidebar")}</button>
+      <span class="brand-mark">${icon("brand")}DevTools</span>
+      ${isWrap ? `
+        <button class="b-omni" data-action="open-palette">
+          <span style="display:inline-flex;align-items:center;gap:6px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
+            ${icon("search", true)}<span>搜索 28 个离线工具…</span>
+          </span>
+          <span class="key-hint">Ctrl+K</span>
+        </button>
+      ` : `
+        ${renderTabItems(st, false)}
+        ${renderTabTrailing(st)}
+        <button class="dt-btn ghost" data-action="open-palette" title="快速命令面板">${icon("search", true)}<span class="key-hint">Ctrl+K</span></button>
+      `}
+      ${renderWinControls()}
+    </div>
+
+    ${isWrap ? `
+      <div class="tab-bar-row">
+        ${renderTabItems(st, false)}
+        ${renderTabTrailing(st)}
+      </div>
+    ` : ""}
+
+    ${showBanner ? `
+      <div class="smart-banner">
+        <span class="smart-tag"><span class="smart-dot"></span>${escHtml(st.smartResult.primaryLabel)}</span>
+        <span class="smart-preview">${escHtml(st.smartResult.redactedPreview)}</span>
+        <div class="smart-recs">${renderSmartRecButtons(st, 2)}<button class="dt-btn ghost icon-only" data-action="dismiss-banner">${icon("close", true)}</button></div>
+      </div>
+    ` : ""}
+
+    <div class="dt-body">
+      ${isCollapsed ? `
+        <nav class="b-rail" aria-label="折叠图标轨">
+          <button class="b-rail-btn ${!st.activeTabId && !st.flyoutCategory ? "active" : ""}" data-action="go-home" title="工作台首页">${icon("home")}</button>
+          <button class="b-rail-btn ${st.flyoutCategory === "fav" ? "active" : ""}" data-action="set-flyout" data-cat="fav" title="收藏">${icon("star")}${st.favorites.some(id => hitSet.has(id)) ? '<span class="b-rail-dot"></span>' : ""}</button>
+          <div style="width:18px;height:1px;background:var(--dt-border);margin:2px 0;"></div>
+          ${DevToolsCore.CATEGORIES.map(cat => {
+            const hasHit = DevToolsCore.TOOLS.some(t => t.cat === cat.id && hitSet.has(t.id));
+            return `<button class="b-rail-btn ${st.flyoutCategory === cat.id ? "active" : ""}" data-action="set-flyout" data-cat="${cat.id}" title="${escHtml(cat.name)}（点击展开浮层抽屉）">${icon(cat.icon)}${hasHit ? '<span class="b-rail-dot"></span>' : ""}</button>`;
+          }).join("")}
+        </nav>
+        ${st.flyoutCategory ? `
+          <div class="b-flyout">
+            <div style="display:flex;align-items:center;justify-content:space-between;padding:2px 6px 8px;margin-bottom:2px;border-bottom:1px solid var(--dt-border);">
+              <span style="font-size:12px;font-weight:600;">${st.flyoutCategory === "fav" ? "收藏工具" : escHtml(DevToolsCore.CATEGORIES.find(c => c.id === st.flyoutCategory)?.name)}</span>
+              <button class="dt-btn ghost icon-only" data-action="set-flyout" data-cat="">${icon("close", true)}</button>
+            </div>
+            ${flyoutTools.map(t => `<button class="nav-item ${hitSet.has(t.id) ? "smart-hit" : ""}" data-action="open-tool" data-tool="${t.id}">${icon(t.icon, true)}<span class="nav-name">${escHtml(t.name)}</span>${hitSet.has(t.id) ? '<span class="smart-dot"></span>' : ""}</button>`).join("")}
+          </div>
+        ` : ""}
+      ` : `
+        <aside class="a-sidebar expanded">${renderSidebarNavItems(st, false)}</aside>
+      `}
+      <main class="dt-main">${activeTab ? renderToolView(st, activeTab) : renderHomeView(st)}</main>
+    </div>
+  `;
+}
+
+function renderVariantA(st) {
+  const activeTab = st.tabs.find(t => t.id === st.activeTabId);
+  const showBanner = isSmartBannerVisible(st) && Boolean(activeTab);
+  const isWrap = st.tabWrap === "wrap";
+  return `
+    <div class="dt-titlebar">
+      <button class="dt-btn ghost icon-only" data-action="toggle-sidebar" title="折叠侧边栏">${icon("sidebar")}</button>
+      <span class="brand-mark">${icon("brand")}DevTools</span>
+      ${isWrap ? `<div style="flex:1;"></div>` : `${renderTabItems(st, false)}${renderTabTrailing(st)}`}
+      <button class="dt-btn ghost" data-action="open-palette" title="快速命令面板">${icon("search", true)}<span class="key-hint">Ctrl+K</span></button>
+      ${renderWinControls()}
+    </div>
+    ${isWrap ? `
+      <div class="tab-bar-row">
+        ${renderTabItems(st, false)}
+        ${renderTabTrailing(st)}
+      </div>
+    ` : ""}
+    ${showBanner ? `
+      <div class="smart-banner">
+        <span class="smart-tag"><span class="smart-dot"></span>${escHtml(st.smartResult.primaryLabel)}</span>
+        <span class="smart-preview">${escHtml(st.smartResult.redactedPreview)}</span>
+        <div class="smart-recs">${renderSmartRecButtons(st, 2)}<button class="dt-btn ghost icon-only" data-action="dismiss-banner">${icon("close", true)}</button></div>
+      </div>
+    ` : ""}
+    <div class="dt-body">
+      <aside class="a-sidebar ${st.sidebarMode}">${renderSidebarNavItems(st, st.sidebarMode === "collapsed")}</aside>
+      <main class="dt-main">${activeTab ? renderToolView(st, activeTab) : renderHomeView(st)}</main>
+    </div>
+  `;
+}
+
+function renderVariantB(st) {
+  const activeTab = st.tabs.find(t => t.id === st.activeTabId);
+  const hitSet = getSmartHitSet(st);
+  const showBanner = isSmartBannerVisible(st);
+  const flyoutTools = st.flyoutCategory === "fav" ? st.favorites.map(id => DevToolsCore.TOOL_MAP[id]) : DevToolsCore.TOOLS.filter(t => t.cat === st.flyoutCategory);
+  return `
+    <div class="dt-titlebar">
+      <span class="brand-mark">${icon("brand")}DevTools</span>
+      <button class="b-omni" data-action="open-palette">
+        <span style="display:inline-flex;align-items:center;gap:6px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
+          ${showBanner ? `<span class="smart-dot"></span><span>已识别 ${escHtml(st.smartResult.primaryLabel)} · 点击直达</span>` : `${icon("search", true)}<span>搜索 28 个离线工具…</span>`}
+        </span>
+        <span class="key-hint">Ctrl+K</span>
+      </button>
+      ${renderWinControls()}
+    </div>
+    <div class="tab-bar-row">
+      <button class="dt-btn ghost icon-only ${!st.activeTabId ? "active" : ""}" data-action="go-home" title="首页">${icon("home", true)}</button>
+      ${renderTabItems(st, true)}
+      ${renderTabTrailing(st)}
+    </div>
+    <div class="dt-body">
+      <nav class="b-rail">
+        <button class="b-rail-btn ${st.flyoutCategory === "fav" ? "active" : ""}" data-action="set-flyout" data-cat="fav" title="收藏">${icon("star")}${st.favorites.some(id => hitSet.has(id)) ? '<span class="b-rail-dot"></span>' : ""}</button>
+        <div style="width:18px;height:1px;background:var(--dt-border);margin:2px 0;"></div>
+        ${DevToolsCore.CATEGORIES.map(cat => {
+          const hasHit = DevToolsCore.TOOLS.some(t => t.cat === cat.id && hitSet.has(t.id));
+          return `<button class="b-rail-btn ${st.flyoutCategory === cat.id ? "active" : ""}" data-action="set-flyout" data-cat="${cat.id}" title="${escHtml(cat.name)}">${icon(cat.icon)}${hasHit ? '<span class="b-rail-dot"></span>' : ""}</button>`;
+        }).join("")}
+      </nav>
+      ${st.flyoutCategory ? `
+        <div class="b-flyout">
+          <div style="display:flex;align-items:center;justify-content:space-between;padding:2px 6px 8px;margin-bottom:2px;border-bottom:1px solid var(--dt-border);">
+            <span style="font-size:12px;font-weight:600;">${st.flyoutCategory === "fav" ? "收藏工具" : escHtml(DevToolsCore.CATEGORIES.find(c => c.id === st.flyoutCategory)?.name)}</span>
+            <button class="dt-btn ghost icon-only" data-action="set-flyout" data-cat="">${icon("close", true)}</button>
+          </div>
+          ${flyoutTools.map(t => `<button class="nav-item ${hitSet.has(t.id) ? "smart-hit" : ""}" data-action="open-tool" data-tool="${t.id}">${icon(t.icon, true)}<span class="nav-name">${escHtml(t.name)}</span>${hitSet.has(t.id) ? '<span class="smart-dot"></span>' : ""}</button>`).join("")}
+        </div>
+      ` : ""}
+      <main class="dt-main">
+        ${activeTab ? renderToolView(st, activeTab) : renderHomeView(st)}
+        ${showBanner && activeTab ? `
+          <div class="b-smart-toast">
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;">
+              <span class="smart-tag"><span class="smart-dot"></span>剪贴板 · ${escHtml(st.smartResult.primaryLabel)}</span>
+              <button class="dt-btn ghost icon-only" style="height:22px;width:22px;" data-action="dismiss-banner">${icon("close", true)}</button>
+            </div>
+            <div class="smart-preview" style="max-width:100%;">${escHtml(st.smartResult.redactedPreview)}</div>
+            <div style="display:flex;gap:6px;flex-wrap:wrap;">${renderSmartRecButtons(st, 2)}</div>
+          </div>
+        ` : ""}
+      </main>
+    </div>
+  `;
+}
+
+function renderVariantC(st) {
+  const activeTab = st.tabs.find(t => t.id === st.activeTabId);
+  const activeTool = activeTab ? DevToolsCore.TOOL_MAP[activeTab.toolId] : null;
+  const activeCat = activeTool ? DevToolsCore.CATEGORIES.find(c => c.id === activeTool.cat) : null;
+  const dups = getDuplicateToolSet(st);
+  const hitSet = getSmartHitSet(st);
+  const showBanner = isSmartBannerVisible(st);
+  const collapsed = st.sidebarMode === "collapsed";
+  return `
+    <div class="dt-titlebar thin">
+      <button class="dt-btn ghost icon-only" data-action="toggle-sidebar" title="折叠工作区栏">${icon("sidebar")}</button>
+      <span class="brand-mark">${icon("brand")}DevTools</span>
+      <span style="color:var(--dt-fg-subtle);">/</span>
+      <span style="font-size:12px;color:var(--dt-fg-muted);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
+        ${activeTool ? `${escHtml(activeCat?.name)} / <span style="color:var(--dt-fg);">${escHtml(activeTool.name)}</span>` : '<span style="color:var(--dt-fg);">工作台首页</span>'}
+      </span>
+      <button class="dt-btn ghost" data-action="open-palette">${icon("search", true)}<span class="key-hint">Ctrl+K</span></button>
+      ${renderWinControls()}
+    </div>
+    <div class="dt-body">
+      <aside class="c-column ${collapsed ? "collapsed" : ""}">
+        ${collapsed ? `
+          <button class="b-rail-btn ${!st.activeTabId ? "active" : ""}" data-action="go-home" title="首页">${icon("home")}</button>
+          <button class="b-rail-btn" data-action="open-palette" title="新建">${icon("plus")}</button>
+          <div style="width:18px;height:1px;background:var(--dt-border);"></div>
+          ${st.tabs.map(tab => `<button class="b-rail-btn ${st.activeTabId === tab.id ? "active" : ""}" data-action="select-tab" data-tab="${tab.id}" title="${escHtml(DevToolsCore.TOOL_MAP[tab.toolId].name)}">${icon(DevToolsCore.TOOL_MAP[tab.toolId].icon)}</button>`).join("")}
+        ` : `
+          ${showBanner ? `
+            <div class="c-smart-box">
+              <div style="display:flex;align-items:center;justify-content:space-between;">
+                <span class="smart-tag"><span class="smart-dot"></span>${escHtml(st.smartResult.primaryLabel)}</span>
+                <button class="dt-btn ghost icon-only" style="height:22px;width:22px;" data-action="dismiss-banner">${icon("close", true)}</button>
+              </div>
+              <div class="smart-preview" style="max-width:100%;">${escHtml(st.smartResult.redactedPreview)}</div>
+              <div style="display:flex;gap:4px;flex-wrap:wrap;">${renderSmartRecButtons(st, 1)}</div>
+            </div>
+          ` : ""}
+          <div class="c-vtabs">
+            <div style="display:flex;align-items:center;justify-content:space-between;padding:2px 6px 5px;">
+              <span style="font-size:11px;color:var(--dt-fg-subtle);">打开中（${st.tabs.length}）</span>
+              <button class="text-link" data-action="go-home">首页</button>
+            </div>
+            ${st.tabs.map(tab => {
+              const t = DevToolsCore.TOOL_MAP[tab.toolId];
+              return `<div class="c-vtab ${st.activeTabId === tab.id ? "active" : ""}" data-action="select-tab" data-tab="${tab.id}">
+                <div class="c-vtab-top">${icon(t.icon, true)}<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escHtml(t.name)}</span>${dups.has(tab.toolId) ? `<span class="tab-num">#${tab.instanceNum}</span>` : ""}<button class="tab-close" data-action="close-tab" data-tab="${tab.id}">${icon("close", true)}</button></div>
+                <div class="c-vtab-sub">${escHtml(tabSnippet(tab))}</div>
+              </div>`;
+            }).join("")}
+          </div>
+          <div class="c-catalog-tabs">
+            <button class="c-cat-tab ${st.cCatalogTab === "fav" ? "active" : ""}" data-action="set-c-tab" data-ctab="fav">收藏</button>
+            <button class="c-cat-tab ${st.cCatalogTab === "all" ? "active" : ""}" data-action="set-c-tab" data-ctab="all">全部 28</button>
+          </div>
+          <div class="c-catalog-list">
+            ${st.cCatalogTab === "fav"
+              ? st.favorites.map(id => { const t = DevToolsCore.TOOL_MAP[id]; return `<button class="nav-item ${hitSet.has(id) ? "smart-hit" : ""}" data-action="open-tool" data-tool="${id}">${icon(t.icon, true)}<span class="nav-name">${escHtml(t.name)}</span>${hitSet.has(id) ? '<span class="smart-dot"></span>' : ""}</button>`; }).join("")
+              : DevToolsCore.CATEGORIES.map(cat => `<div class="nav-head"><span>${escHtml(cat.name)}</span></div>` + DevToolsCore.TOOLS.filter(t => t.cat === cat.id).map(t => `<button class="nav-item ${hitSet.has(t.id) ? "smart-hit" : ""}" data-action="open-tool" data-tool="${t.id}"><span class="nav-name">${escHtml(t.name)}</span>${hitSet.has(t.id) ? '<span class="smart-dot"></span>' : ""}</button>`).join("")).join("")
+            }
+          </div>
+        `}
+      </aside>
+      <main class="dt-main">${activeTab ? renderToolView(st, activeTab) : renderHomeView(st)}</main>
+    </div>
+  `;
+}
+
+function renderPalette(st) {
+  if (!st.paletteOpen) return "";
+  const items = getPaletteItems(st);
+  const clampedIdx = items.length ? Math.min(st.paletteIndex, items.length - 1) : 0;
+  let lastGroup = "";
+  return `
+    <div class="palette-backdrop" data-action="close-palette-bg">
+      <div class="palette-modal">
+        <div class="palette-input-row">${icon("search")}<input id="palette-input" type="text" value="${escHtml(st.paletteQuery)}" placeholder="搜索工具（中文 / 英文 / b64 / jwt / ts）…" /><span class="key-hint">Esc</span></div>
+        <div class="palette-list">
+          ${items.length === 0 ? `<div style="padding:18px;text-align:center;color:var(--dt-fg-subtle);">无匹配工具</div>` : items.map((item, i) => {
+            let g = "";
+            if (item.group !== lastGroup) { lastGroup = item.group; g = `<div class="palette-group">${escHtml(item.group)}</div>`; }
+            return g + `<button class="palette-item ${i === clampedIdx ? "selected" : ""}" data-action="palette-pick" data-idx="${i}">
+              <span style="display:flex;align-items:center;gap:8px;">${icon(item.tool.icon, true)}<span>${escHtml(item.tool.name)}</span><span style="font-size:11px;color:var(--dt-fg-subtle);">${escHtml(item.tool.en)}</span></span>
+              ${item.smartRec ? `<span class="smart-tag" style="font-size:10.5px;"><span class="smart-dot"></span>带入 ${escHtml(item.smartRec.dataLabel)}</span>` : ""}
+            </button>`;
+          }).join("")}
+        </div>
+        <div class="palette-footer"><span>↑↓ 选择 · Enter 打开 · Ctrl+Enter 多开</span><span>28 个离线工具</span></div>
+      </div>
+    </div>
+  `;
+}
+
+function renderStandbyView(st) {
+  const isDeep = st.residency === "DeepSleep";
+  return `
+    <div class="dt-standby-view">
+      <div class="standby-card">
+        <span class="standby-status"><span class="status-dot ${isDeep ? "deep" : "warm"}"></span>${isDeep ? "Deep Sleep (Headless)" : "Warm Standby · 60s 宽限期"}</span>
+        <div style="font-size:13.5px;font-weight:600;">主工作台已收起到托盘</div>
+        <div style="font-size:12px;color:var(--dt-fg-muted);">内存中保留 ${st.tabs.length} 个标签页，后台零剪贴板轮询。</div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:center;margin-top:4px;">
+          <button class="dt-btn primary" data-action="smart-toggle">热键唤起</button>
+          <button class="dt-btn" data-action="wake-palette">托盘 ▸ 命令面板</button>
+          ${!isDeep ? `<button class="dt-btn" data-action="advance-deep">快进 60s 进深休眠</button>` : ""}
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function renderEvalDrawer(st) {
+  const sc = SCENARIOS[st.activeScenario];
+  const sr = st.smartResult;
+  const residencyShort = st.residency === "Active" ? "Active" : st.residency === "WarmStandby" ? "WarmStandby" : "DeepSleep";
+  return `
+    <div class="eval-box">
+      <div class="eval-bar">
+        <div class="eval-tabs">
+          <button class="eval-tab ${st.evalTab === "scenarios" ? "active" : ""}" data-action="set-eval-tab" data-etab="scenarios">交互剧本验证</button>
+          <button class="eval-tab ${st.evalTab === "state" ? "active" : ""}" data-action="set-eval-tab" data-etab="state">壳层状态详情</button>
+        </div>
+        <span class="eval-summary">${residencyShort} · ${st.tabs.length} 标签 · ${sr.skipped ? "智能识别跳过" : `${sr.primaryLabel} (${sr.primaryLevel})`} · ${st.keySteps} 步</span>
+      </div>
+      <div class="eval-body">
+        ${st.evalTab === "scenarios" ? `
+          <div class="sc-strip">
+            <div class="sc-pills">
+              ${SCENARIOS.map((s, i) => `<button class="sc-pill ${i === st.activeScenario ? "active" : ""}" data-action="pick-scenario" data-idx="${i}">${escHtml(s.title)}</button>`).join("")}
+            </div>
+            <div style="display:inline-flex;gap:5px;">
+              <button class="sim-btn" style="height:24px;font-size:11px;" data-action="explicit-paste">智能粘贴</button>
+              <button class="sim-btn" style="height:24px;font-size:11px;" data-action="handle-esc">Esc 退避</button>
+              <button class="sim-btn" style="height:24px;font-size:11px;" data-action="reset-scenario">${icon("reset", true)}重置</button>
+            </div>
+          </div>
+          <div class="step-grid">
+            ${sc.steps.map((step, i) => `
+              <button class="step-btn ${i < st.scenarioStep ? "done" : i === st.scenarioStep ? "current" : ""}" data-action="run-step" data-step="${i}">
+                <span class="step-idx">${i < st.scenarioStep ? "✓" : `0${i + 1}`}</span>
+                <span>${escHtml(step.label)}</span>
+              </button>
+            `).join("")}
+          </div>
+        ` : `
+          <div style="font-size:12px;color:var(--foreground);">${escHtml(st.lastTransition)}</div>
+          <div class="state-kv">
+            <div class="kv-item"><span class="kv-k">常驻 / 焦点</span><span class="kv-v">${residencyShort} · ${escHtml(st.focusTarget)}</span></div>
+            <div class="kv-item"><span class="kv-k">已开标签页（${st.tabWrap === "wrap" ? "多行" : "单行"}）</span><span class="kv-v">${st.tabs.length ? st.tabs.map(t => `${DevToolsCore.TOOL_MAP[t.toolId].name}#${t.instanceNum}`).join(", ") : "无（首页）"}</span></div>
+            <div class="kv-item"><span class="kv-k">智能识别结论</span><span class="kv-v">${sr.skipped ? escHtml(sr.reason) : `${sr.primaryLabel} → ${sr.recommendations.slice(0, 2).map(r => DevToolsCore.TOOL_MAP[r.toolId].name).join(" / ")}`}</span></div>
+          </div>
+        `}
+      </div>
+    </div>
+  `;
+}
+
+function render() {
+  const activeElId = document.activeElement?.id || null;
+  const selStart = document.activeElement?.selectionStart;
+  const selEnd = document.activeElement?.selectionEnd;
+  const curVariant = DevToolsCore.VARIANTS.find(v => v.id === state.variant) || DevToolsCore.VARIANTS[0];
+
+  document.getElementById("app").innerHTML = `
+    <div class="sim-bar">
+      <div class="sim-group">
+        <span class="sim-label">剪贴板</span>
+        <select class="sim-select" id="clip-preset-select">
+          ${DevToolsCore.CLIPBOARD_PRESETS.map(p => `<option value="${p.id}" ${state.clipboard.id === p.id ? "selected" : ""}>${escHtml(p.label)}</option>`).join("")}
+        </select>
+        <button class="sim-btn ${state.residency !== "Active" ? "active" : ""}" data-action="smart-toggle">${icon("tray", true)}${state.residency === "Active" ? "收起到托盘" : "热键唤起"}</button>
+        <button class="sim-btn" data-action="open-palette">${icon("command", true)}Ctrl+K</button>
+      </div>
+      <div class="sim-group">
+        <div class="sim-seg" title="横向页签排列方式（A / B 生效）">
+          <button class="${state.tabWrap === "wrap" ? "active" : ""}" data-action="set-tab-wrap" data-wrap="wrap">多行页签</button>
+          <button class="${state.tabWrap === "single" ? "active" : ""}" data-action="set-tab-wrap" data-wrap="single">单行页签</button>
+        </div>
+        <div class="sim-seg" title="外观主题">
+          <button class="${state.dtTheme === "dark" ? "active" : ""}" data-action="set-theme" data-theme="dark">Dark</button>
+          <button class="${state.dtTheme === "light" ? "active" : ""}" data-action="set-theme" data-theme="light">Light</button>
+        </div>
+        <div class="sim-seg" title="窗口宽度">
+          <button class="${state.windowSize === "fluid" ? "active" : ""}" data-action="set-size" data-size="fluid">自适应</button>
+          <button class="${state.windowSize === "desktop" ? "active" : ""}" data-action="set-size" data-size="desktop">1160</button>
+          <button class="${state.windowSize === "compact" ? "active" : ""}" data-action="set-size" data-size="compact">820</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="window-stage">
+      <div class="window-frame-holder" data-size="${state.windowSize}">
+        <div class="dt-window" data-dt-theme="${state.dtTheme}">
+          ${state.residency !== "Active"
+            ? renderStandbyView(state)
+            : (state.variant === "AB" ? renderVariantAB(state) : state.variant === "A" ? renderVariantA(state) : state.variant === "B" ? renderVariantB(state) : renderVariantC(state))
+          }
+          ${renderPalette(state)}
+          ${state.toast ? `<div class="dt-toast">${escHtml(state.toast)}</div>` : ""}
+        </div>
+      </div>
+    </div>
+
+    <div class="bottom-row">
+      <div class="variant-switcher" role="toolbar" aria-label="布局方案切换">
+        <button class="sw-arrow" data-action="prev-variant" title="上一方案 (←)">${icon("chevLeft", true)}</button>
+        <span class="sw-label">方案 ${curVariant.id} · ${escHtml(curVariant.name)}</span>
+        <button class="sw-arrow" data-action="next-variant" title="下一方案 (→)">${icon("chevRight", true)}</button>
+        <span class="sw-pills">
+          ${DevToolsCore.VARIANTS.map(v => `<button class="sw-pill ${v.id === state.variant ? "active" : ""}" data-action="set-variant" data-variant="${v.id}">${v.id}</button>`).join("")}
+        </span>
+      </div>
+      <span class="eval-summary">${escHtml(state.lastTransition)}</span>
+    </div>
+
+    ${renderEvalDrawer(state)}
+  `;
+
+  if (state.paletteOpen) {
+    const pi = document.getElementById("palette-input");
+    if (pi) { pi.focus(); pi.setSelectionRange(pi.value.length, pi.value.length); }
+  } else if (activeElId === "active-tool-input" || activeElId === "home-search-input") {
+    const el = document.getElementById(activeElId);
+    if (el) { el.focus(); if (typeof selStart === "number") el.setSelectionRange(selStart, selEnd); }
+  }
+}
+
+document.getElementById("app").addEventListener("click", e => {
+  const target = e.target.closest("[data-action]");
+  if (!target) return;
+  const act = target.dataset.action;
+
+  if (act === "close-tab") { e.stopPropagation(); dispatch({ type: "CLOSE_TAB", tabId: target.dataset.tab }); return; }
+  if (act === "select-tab") { dispatch({ type: "SELECT_TAB", tabId: target.dataset.tab }); return; }
+  if (act === "open-tool") { dispatch({ type: "OPEN_TOOL", toolId: target.dataset.tool, forceNew: e.ctrlKey || e.metaKey }); return; }
+  if (act === "dup-tool") { dispatch({ type: "OPEN_TOOL", toolId: target.dataset.tool, forceNew: true }); return; }
+  if (act === "smart-open") { dispatch({ type: "OPEN_TOOL", toolId: target.dataset.tool, payload: state.clipboard.text, autoMode: target.dataset.mode, source: "smart" }); return; }
+  if (act === "relay-send") {
+    const tab = state.tabs.find(t => t.id === state.activeTabId);
+    const out = tab ? DevToolsCore.computeToolOutput(tab.toolId, tab.mode, tab.input).text : "";
+    dispatch({ type: "OPEN_TOOL", toolId: target.dataset.tool, payload: out, autoMode: target.dataset.mode, source: "relay" });
+    return;
+  }
+  if (act === "go-home") { dispatch({ type: "SELECT_TAB", tabId: null }); return; }
+  if (act === "toggle-sidebar") { dispatch({ type: "TOGGLE_SIDEBAR" }); return; }
+  if (act === "toggle-cat") { dispatch({ type: "TOGGLE_CAT", catId: target.dataset.cat }); return; }
+  if (act === "set-flyout") { dispatch({ type: "SET_FLYOUT", catId: target.dataset.cat || null }); return; }
+  if (act === "set-c-tab") { dispatch({ type: "SET_C_CATALOG_TAB", tab: target.dataset.ctab }); return; }
+  if (act === "cycle-layout") { dispatch({ type: "CYCLE_TAB_LAYOUT", tabId: target.dataset.tab }); return; }
+  if (act === "toggle-fav") { dispatch({ type: "TOGGLE_FAVORITE", toolId: target.dataset.tool }); return; }
+  if (act === "fill-sample") { const tab = state.tabs.find(t => t.id === target.dataset.tab); if (tab) dispatch({ type: "UPDATE_TAB_INPUT", tabId: tab.id, input: DevToolsCore.TOOL_MAP[tab.toolId].sample }); return; }
+  if (act === "clear-input") { dispatch({ type: "UPDATE_TAB_INPUT", tabId: target.dataset.tab, input: "" }); return; }
+  if (act === "open-palette") { dispatch({ type: "OPEN_PALETTE" }); return; }
+  if (act === "wake-palette") { dispatch({ type: "SMART_TOGGLE", openPalette: true }); return; }
+  if (act === "close-palette-bg" && e.target === target) { dispatch({ type: "HANDLE_ESC" }); return; }
+  if (act === "palette-pick") {
+    const item = getPaletteItems(state)[Number(target.dataset.idx)];
+    if (item) dispatch({ type: "OPEN_TOOL", toolId: item.tool.id, payload: item.smartRec ? state.clipboard.text : null, autoMode: item.smartRec ? item.smartRec.autoMode : null, forceNew: e.ctrlKey || e.metaKey, source: item.smartRec ? "smart" : "palette" });
+    return;
+  }
+  if (act === "toggle-relay") { dispatch({ type: "TOGGLE_RELAY_MENU" }); return; }
+  if (act === "copy-out" || act === "copy-dismiss") {
+    const tab = state.tabs.find(t => t.id === state.activeTabId);
+    const out = tab ? DevToolsCore.computeToolOutput(tab.toolId, tab.mode, tab.input).text : "";
+    if (out) { try { navigator.clipboard?.writeText(out); } catch {} dispatch({ type: "COPY_OUTPUT", text: out, andDismiss: act === "copy-dismiss" }); }
+    return;
+  }
+  if (act === "smart-toggle") { dispatch({ type: "SMART_TOGGLE" }); return; }
+  if (act === "advance-deep") { dispatch({ type: "ADVANCE_DEEP_SLEEP" }); return; }
+  if (act === "explicit-paste") { dispatch({ type: "EXPLICIT_SMART_PASTE" }); return; }
+  if (act === "dismiss-banner") { dispatch({ type: "DISMISS_SMART_BANNER" }); return; }
+  if (act === "handle-esc") { dispatch({ type: "HANDLE_ESC" }); return; }
+  if (act === "set-theme") { dispatch({ type: "SET_DT_THEME", theme: target.dataset.theme }); return; }
+  if (act === "set-size") { dispatch({ type: "SET_WINDOW_SIZE", size: target.dataset.size }); return; }
+  if (act === "set-tab-wrap") { dispatch({ type: "SET_TAB_WRAP", mode: target.dataset.wrap }); return; }
+  if (act === "toggle-tab-wrap") { dispatch({ type: "TOGGLE_TAB_WRAP" }); return; }
+  if (act === "set-eval-tab") { dispatch({ type: "SET_EVAL_TAB", tab: target.dataset.etab }); return; }
+  if (act === "toggle-size") { dispatch({ type: "SET_WINDOW_SIZE", size: state.windowSize === "compact" ? "desktop" : "compact" }); return; }
+  if (act === "toast-min") { state = { ...state, toast: "系统原生最小化到任务栏 / Dock" }; render(); return; }
+  if (act === "set-variant") { dispatch({ type: "SET_VARIANT", variant: target.dataset.variant }); return; }
+  if (act === "prev-variant" || act === "next-variant") {
+    const ids = DevToolsCore.VARIANTS.map(v => v.id);
+    dispatch({ type: "SET_VARIANT", variant: ids[(ids.indexOf(state.variant) + (act === "next-variant" ? 1 : ids.length - 1)) % ids.length] });
+    return;
+  }
+  if (act === "pick-scenario") { const i = Number(target.dataset.idx); dispatch({ type: "RESET_FOR_SCENARIO", scenarioIndex: i, patch: SCENARIOS[i].setup() }); return; }
+  if (act === "reset-scenario") { const i = state.activeScenario; dispatch({ type: "RESET_FOR_SCENARIO", scenarioIndex: i, patch: SCENARIOS[i].setup() }); return; }
+  if (act === "run-step") {
+    const stepIdx = Number(target.dataset.step), sc = SCENARIOS[state.activeScenario];
+    if (sc && sc.steps[stepIdx]) {
+      if (stepIdx === 0 && !state.scenarioInitialized) dispatch({ type: "RESET_FOR_SCENARIO", scenarioIndex: state.activeScenario, patch: sc.setup() });
+      sc.steps[stepIdx].run(dispatch, state);
+      dispatch({ type: "SET_SCENARIO_STEP", step: Math.max(state.scenarioStep, stepIdx + 1) });
+    }
+  }
+});
+
+document.getElementById("app").addEventListener("input", e => {
+  if (e.target.id === "active-tool-input") dispatch({ type: "UPDATE_TAB_INPUT", tabId: e.target.dataset.tab, input: e.target.value });
+  else if (e.target.id === "palette-input") dispatch({ type: "UPDATE_PALETTE_QUERY", query: e.target.value });
+  else if (e.target.id === "home-search-input") dispatch({ type: "SET_HOME_QUERY", query: e.target.value });
+});
+
+document.getElementById("app").addEventListener("change", e => {
+  if (e.target.id === "clip-preset-select") {
+    const preset = DevToolsCore.CLIPBOARD_PRESETS.find(p => p.id === e.target.value);
+    if (preset) dispatch({ type: "SET_CLIPBOARD", preset });
+  } else if (e.target.id === "tool-mode-select") {
+    dispatch({ type: "UPDATE_TAB_MODE", tabId: e.target.dataset.tab, mode: e.target.value });
+  }
+});
+
+let dragState = null;
+document.getElementById("app").addEventListener("mousedown", e => {
+  const handle = e.target.closest("[data-split-handle]");
+  if (!handle) return;
+  const canvas = handle.closest(".tool-canvas");
+  if (!canvas) return;
+  dragState = { tabId: handle.dataset.splitHandle, rect: canvas.getBoundingClientRect(), vertical: canvas.classList.contains("split-v") };
+  e.preventDefault();
+});
+window.addEventListener("mousemove", e => {
+  if (!dragState) return;
+  const ratio = dragState.vertical ? ((e.clientY - dragState.rect.top) / dragState.rect.height) * 100 : ((e.clientX - dragState.rect.left) / dragState.rect.width) * 100;
+  dispatch({ type: "UPDATE_SPLIT_RATIO", tabId: dragState.tabId, ratio: Math.round(ratio) });
+});
+window.addEventListener("mouseup", () => { dragState = null; });
+
+window.addEventListener("keydown", e => {
+  const tag = (e.target?.tagName || "").toUpperCase();
+  const isEditing = tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || e.target?.isContentEditable;
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") { e.preventDefault(); if (state.paletteOpen) dispatch({ type: "HANDLE_ESC" }); else dispatch({ type: "OPEN_PALETTE" }); return; }
+  if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === "v") { e.preventDefault(); dispatch({ type: "EXPLICIT_SMART_PASTE" }); return; }
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "w" && state.residency === "Active" && state.activeTabId) { e.preventDefault(); dispatch({ type: "CLOSE_TAB", tabId: state.activeTabId }); return; }
+  if (e.key === "Escape") { e.preventDefault(); if (isEditing && document.activeElement?.blur && !state.paletteOpen) document.activeElement.blur(); dispatch({ type: "HANDLE_ESC" }); return; }
+  if (state.paletteOpen) {
+    const items = getPaletteItems(state);
+    if (e.key === "ArrowDown") { e.preventDefault(); dispatch({ type: "MOVE_PALETTE_INDEX", index: Math.min(items.length - 1, state.paletteIndex + 1) }); return; }
+    if (e.key === "ArrowUp") { e.preventDefault(); dispatch({ type: "MOVE_PALETTE_INDEX", index: Math.max(0, state.paletteIndex - 1) }); return; }
+    if (e.key === "Enter" && items.length > 0) {
+      e.preventDefault();
+      const item = items[Math.min(state.paletteIndex, items.length - 1)];
+      dispatch({ type: "OPEN_TOOL", toolId: item.tool.id, payload: item.smartRec ? state.clipboard.text : null, autoMode: item.smartRec ? item.smartRec.autoMode : null, forceNew: e.ctrlKey || e.metaKey, source: item.smartRec ? "smart" : "palette" });
+    }
+    return;
+  }
+  if (!state.activeTabId && state.residency === "Active" && e.key === "Enter" && !state.homeQuery.trim()) {
+    const rec = !state.smartResult.skipped && state.smartResult.recommendations[0];
+    if (rec && state.dismissedClipSeq !== state.clipboard.seq) { e.preventDefault(); dispatch({ type: "OPEN_TOOL", toolId: rec.toolId, payload: state.clipboard.text, autoMode: rec.autoMode, source: "smart" }); return; }
+  }
+  if (!isEditing && (e.key === "ArrowLeft" || e.key === "ArrowRight")) {
+    e.preventDefault();
+    const ids = DevToolsCore.VARIANTS.map(v => v.id);
+    dispatch({ type: "SET_VARIANT", variant: ids[(ids.indexOf(state.variant) + (e.key === "ArrowRight" ? 1 : ids.length - 1)) % ids.length] });
+  }
+});
+
+render();
+</script>
+</body>
+</html>
