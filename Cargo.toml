@@ -22,6 +22,15 @@ thiserror = "2"
 directories = "6"
 toml = "1.2"
 gpui-kit = "=0.11.0"
+base64 = "0.23"
+imagesize = "0.14"
+jiff = "1.0"
+regex = "1.13"
+serde-saphyr = "2.2"
+url = "2.5.9"
+croner = { version = "5.0", default-features = false, features = ["std", "jiff"] }
+csscolorparser = "0.9"
+nucleo-matcher = "0.3"
 
 # M2 OS integration layer (all zero-GPUI / zero-tokio).
 async-channel = "2"

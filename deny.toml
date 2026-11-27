@@ -40,13 +40,17 @@ allow = [
 confidence-threshold = 0.8
 
 # Weak-copyleft MPL-2.0 is NOT allowed globally; grant scoped exceptions only
-# to the upstream transitive crates that require them.
+# to the three upstream transitive crates and the unmodified nucleo-matcher
+# explicitly selected by ADR-0001 / V1 spec for the pure-Rust search engine.
 exceptions = [
     { allow = ["MPL-2.0"], crate = "cbindgen" },
     { allow = ["MPL-2.0"], crate = "dwrote" },
     { allow = ["MPL-2.0"], crate = "option-ext" },
     # Linux SNI tray backend (Linux-only, via tray-icon's `ksni` feature).
     { allow = ["Unlicense"], crate = "ksni" },
+    # File-level MPL obligations remain with this unmodified upstream crate;
+    # no MPL source is copied into the workspace (V1's required search matcher).
+    { allow = ["MPL-2.0"], crate = "nucleo-matcher@0.3.1" },
 ]
 
 [licenses.private]

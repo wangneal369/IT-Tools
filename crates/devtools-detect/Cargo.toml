@@ -9,3 +9,17 @@ description = "Hierarchical smart-detection DAG engine (zero GPUI)"
 
 [dependencies]
 devtools-core = { path = "../devtools-core" }
+base64.workspace = true
+imagesize.workspace = true
+jiff.workspace = true
+regex.workspace = true
+serde_json.workspace = true
+serde-saphyr.workspace = true
+toml.workspace = true
+url.workspace = true
+croner.workspace = true
+csscolorparser.workspace = true
+
+[dev-dependencies]
+serde.workspace = true
+static_assertions = "1"
