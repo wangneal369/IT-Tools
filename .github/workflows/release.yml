@@ -207,12 +207,13 @@ jobs:
       - name: Report measured sizes
         shell: bash
         run: |
-          echo "Artifacts for ${{ matrix.artifact }}:" > size-report.txt
+          REPORT="dist/size-report-${{ matrix.artifact }}.txt"
+          echo "Artifacts for ${{ matrix.artifact }}:" > "$REPORT"
           ls -l dist
           for f in dist/DevTools-*; do
-            [ -f "$f" ] && echo "$(basename "$f") $(stat -c%s "$f" 2>/dev/null || stat -f%z "$f") bytes" >> size-report.txt
+            [ -f "$f" ] && echo "$(basename "$f") $(stat -c%s "$f" 2>/dev/null || stat -f%z "$f") bytes" >> "$REPORT"
           done
-          cat size-report.txt
+          cat "$REPORT"
 
       - name: Upload workflow artifacts
         uses: actions/upload-artifact@v4
@@ -220,7 +221,7 @@ jobs:
           name: ${{ matrix.artifact }}
           path: |
             dist/DevTools-*
-            size-report.txt
+            dist/size-report-${{ matrix.artifact }}.txt
           if-no-files-found: error
 
   release:
@@ -240,6 +241,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          ls -la dist
           cd dist
           sha256sum DevTools-* | tee SHA256SUMS.txt
 
@@ -251,9 +253,9 @@ jobs:
         run: |
           set -euo pipefail
           TAG="$GITHUB_REF_NAME"
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" dist/DevTools-* dist/SHA256SUMS.txt --clobber
+          if gh release view "$TAG" --repo "$GH_REPO" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/DevTools-* dist/SHA256SUMS.txt --repo "$GH_REPO" --clobber
           else
             gh release create "$TAG" dist/DevTools-* dist/SHA256SUMS.txt \
-              --title "DevTools $TAG" --generate-notes
+              --repo "$GH_REPO" --verify-tag --title "DevTools $TAG" --generate-notes
           fi
