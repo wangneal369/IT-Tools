@@ -17,6 +17,6 @@ V1 选择 Apache-2.0 三层框架 **`longbridge/gpui-kit`**（默认 `gpui-pre` 
 ## Consequences
 
 - **严禁混用旧版第三方 GPUI crate**：`gpui-kit` 对 `gpui-pre-*` 精确等号锁死，无法与依赖官方 `gpui 0.2.2` 或其他 `gpui-pre` 版本的第三方 UI crate 混用。系统托盘、全局快捷键、剪贴板、单实例 IPC 与异步任务一律使用无 GPUI 依赖的纯 Rust crate 经通道桥接。
-- **版本与工具链管理**：根 `Cargo.toml` 精确锁定 `gpui-kit` 版本并提交 `Cargo.lock` 与 `rust-toolchain.toml`（MSRV **Rust 1.92+**，`edition = "2024"`），采用按里程碑批量升级而非追每周小更。
+- **版本与工具链管理**：根 `Cargo.toml` 精确锁定 `gpui-kit` 版本并提交 `Cargo.lock` 与 `rust-toolchain.toml`（MSRV **Rust 1.95+**，`edition = "2024"`——经 [#12](https://github.com/wangneal369/IT-Tools/issues/12) 实机编译确认 `gpui-pre 0.3.14` 依赖 Rust 1.95 稳定的 `std::hint::cold_path()`，Rust 1.94 下 `E0658` 编译失败），采用按里程碑批量升级而非追每周小更。
 - **Feature 裁剪与开发配置基线**：禁用 `gpui-fast`、`gpui-webview`、`speech`、`gpui-shell`；语法高亮仅按需启用 V1 高频 `tree-sitter-*` feature（不启用全量 `tree-sitter-languages`）；命令面板通过 `.filterable(false)` 外接纯 Rust 模糊打分引擎（如 `nucleo-matcher`）；根 `Cargo.toml` 需配置 `[profile.dev.package]` 对框架/布局/文本核心依赖开启 `opt-level = 3`，Release 开启 `strip = "symbols"`。
 - **三端构建约束**：Windows 依赖 Direct3D 11 与 Windows SDK `fxc.exe`（不可从 Linux 交叉编译），CI 须使用三端原生 Runner；Linux 运行时强依赖可用 Vulkan 驱动。
