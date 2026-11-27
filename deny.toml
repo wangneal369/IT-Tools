@@ -4,7 +4,8 @@
 #   1. advisories — deny vulnerabilities/yanks; temporary ignore ONLY for
 #      RUSTSEC-2026-0543 (chrono) inherited from pinned gpui-pre 0.3.14.
 #   2. licenses   — permissive SPDX identifiers only, with narrowly scoped
-#      exceptions for three upstream transitive MPL-2.0 crates.
+#      per-crate exceptions for three upstream MPL-2.0 crates and `ksni`
+#      (Unlicense, Linux-only SNI tray backend).
 #   3. bans       — block forbidden crates and direct workspace `chrono`.
 #   4. sources    — crates.io registry only, no git sources.
 
@@ -39,11 +40,13 @@ allow = [
 confidence-threshold = 0.8
 
 # Weak-copyleft MPL-2.0 is NOT allowed globally; grant scoped exceptions only
-# to the three upstream transitive crates pulled in by `gpui-pre` and `directories`.
+# to the upstream transitive crates that require them.
 exceptions = [
     { allow = ["MPL-2.0"], crate = "cbindgen" },
     { allow = ["MPL-2.0"], crate = "dwrote" },
     { allow = ["MPL-2.0"], crate = "option-ext" },
+    # Linux SNI tray backend (Linux-only, via tray-icon's `ksni` feature).
+    { allow = ["Unlicense"], crate = "ksni" },
 ]
 
 [licenses.private]

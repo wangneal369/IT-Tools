@@ -490,6 +490,29 @@ mod tests {
     }
 
     #[test]
+    fn legacy_config_without_locale_still_loads() {
+        let (_dir, store) = sandbox();
+        let path = store.paths().config_file();
+        fs::create_dir_all(path.parent().unwrap()).expect("create dir");
+
+        // Hand-written config.toml from before M2 added `locale`.
+        let legacy = toml::to_string_pretty(&AppSettings::default())
+            .expect("serialize")
+            .lines()
+            .filter(|line| !line.starts_with("locale ="))
+            .collect::<Vec<_>>()
+            .join("\n");
+        fs::write(&path, legacy).expect("write legacy");
+
+        let loaded = store
+            .load_settings()
+            .expect("load legacy")
+            .into_value()
+            .expect("value");
+        assert_eq!(loaded.locale, devtools_core::Locale::ZhCn);
+    }
+
+    #[test]
     fn window_state_roundtrip_and_creates_nested_dirs() {
         let dir = tempfile::tempdir().expect("tempdir");
         let nested = dir.path().join("nested").join("devtools");
