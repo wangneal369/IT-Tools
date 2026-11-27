@@ -25,7 +25,7 @@ jobs:
             libxkbcommon-dev libxkbcommon-x11-dev libx11-dev libxcb1-dev \
             libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
             libxcb-randr0-dev libxcb-cursor-dev libwayland-dev \
-            libvulkan-dev libasound2-dev pkg-config
+            libvulkan-dev libfontconfig1-dev libfreetype-dev libasound2-dev pkg-config
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -72,7 +72,7 @@ jobs:
             libxkbcommon-dev libxkbcommon-x11-dev libx11-dev libxcb1-dev \
             libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
             libxcb-randr0-dev libxcb-cursor-dev libwayland-dev \
-            libvulkan-dev libasound2-dev pkg-config
+            libvulkan-dev libfontconfig1-dev libfreetype-dev libasound2-dev pkg-config
 
       - uses: dtolnay/rust-toolchain@stable
         with:
