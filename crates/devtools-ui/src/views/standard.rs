@@ -9,7 +9,8 @@ use devtools_tools::{
 use gpui_kit::*;
 
 use super::Model;
-use super::runtime::{Inputs, ToolResult, ToolView};
+use super::runtime::{Inputs, ToolResult, ToolView, option_group, options_bar};
+use crate::icons::IconName;
 use crate::theme::Palette;
 
 #[derive(Clone)]
@@ -216,95 +217,382 @@ impl StandardOptions {
         palette: Palette,
         cx: &Context<ToolView>,
     ) -> AnyElement {
-        let mut bar = div().flex().flex_wrap().gap_2().p_2();
-        macro_rules! choices {
-            ($field:ident, $labels:expr) => {
-                for (index, label) in $labels.into_iter().enumerate() {
-                    bar = bar.child(view.chip(
-                        &format!("{}-{index}", stringify!($field)),
-                        label,
-                        self.$field == index,
+        let mut groups: Vec<AnyElement> = Vec::new();
+
+        match self.tool {
+            ToolId::DataFormatConverter => {
+                groups.push(option_group(
+                    "源格式",
+                    palette,
+                    view.segmented(
+                        "from",
+                        &["JSON", "YAML", "TOML", "XML"],
+                        self.from,
                         palette,
                         cx,
-                        move |view| {
-                            if let Model::Standard(options) = &mut view.model {
-                                options.$field = index;
+                        |view, idx| {
+                            if let Model::Standard(opt) = &mut view.model {
+                                opt.from = idx;
                             }
                         },
-                    ));
-                }
-            };
-        }
-        macro_rules! toggle {
-            ($field:ident, $label:expr) => {
-                bar = bar.child(view.chip(
-                    stringify!($field),
-                    $label,
-                    self.$field,
+                    ),
+                ));
+                groups.push(view.action_pill(
+                    "swap-format",
+                    Some(IconName::ArrowLeftRight),
+                    "互换",
                     palette,
                     cx,
                     |view| {
-                        if let Model::Standard(options) = &mut view.model {
-                            options.$field = !options.$field;
+                        if let Model::Standard(opt) = &mut view.model {
+                            std::mem::swap(&mut opt.from, &mut opt.to);
                         }
                     },
                 ));
-            };
-        }
-        match self.tool {
-            ToolId::DataFormatConverter => {
-                bar = bar.child(div().text_xs().child("源"));
-                choices!(from, ["JSON", "YAML", "TOML", "XML"]);
-                bar = bar.child(div().text_xs().child("目标"));
-                choices!(to, ["JSON", "YAML", "TOML", "XML"]);
-                choices!(indent, ["缩进 2", "缩进 4"]);
-                toggle!(toggle, "排序键");
-            }
-            ToolId::HtmlEntityUnicode => {
-                toggle!(reverse, "解码（关闭为编码）");
-                choices!(style, ["HTML Entity", "\\uXXXX", "CSS \\XXXXXX", "U+XXXX"]);
-                toggle!(toggle, "仅非 ASCII");
-            }
-            ToolId::StringEscape => {
-                toggle!(reverse, "反转义（关闭为转义）");
-                choices!(style, ["JSON", "C-Rust", "Shell-POSIX", "Regex"]);
-                toggle!(lines, "逐行");
-            }
-            ToolId::GzipCompress => {
-                toggle!(reverse, "解压（关闭为压缩）");
-                choices!(style, ["Base64", "Hex"]);
-                for level in 1..=9 {
-                    bar = bar.child(view.chip(
-                        &format!("level-{level}"),
-                        level.to_string(),
-                        self.level == level,
+                groups.push(option_group(
+                    "目标格式",
+                    palette,
+                    view.segmented(
+                        "to",
+                        &["JSON", "YAML", "TOML", "XML"],
+                        self.to,
                         palette,
                         cx,
-                        move |view| {
-                            if let Model::Standard(options) = &mut view.model {
-                                options.level = level;
+                        |view, idx| {
+                            if let Model::Standard(opt) = &mut view.model {
+                                opt.to = idx;
                             }
                         },
+                    ),
+                ));
+                groups.push(option_group(
+                    "缩进",
+                    palette,
+                    view.segmented(
+                        "indent",
+                        &["2 空格", "4 空格"],
+                        self.indent,
+                        palette,
+                        cx,
+                        |view, idx| {
+                            if let Model::Standard(opt) = &mut view.model {
+                                opt.indent = idx;
+                            }
+                        },
+                    ),
+                ));
+                groups.push(view.toggle_pill(
+                    "sort-keys",
+                    "按键名排序",
+                    self.toggle,
+                    palette,
+                    cx,
+                    |view| {
+                        if let Model::Standard(opt) = &mut view.model {
+                            opt.toggle = !opt.toggle;
+                        }
+                    },
+                ));
+            }
+            ToolId::HtmlEntityUnicode => {
+                groups.push(option_group(
+                    "方向",
+                    palette,
+                    view.segmented(
+                        "mode",
+                        &["编码", "解码"],
+                        usize::from(self.reverse),
+                        palette,
+                        cx,
+                        |view, idx| {
+                            if let Model::Standard(opt) = &mut view.model {
+                                opt.reverse = idx == 1;
+                            }
+                        },
+                    ),
+                ));
+                groups.push(option_group(
+                    "格式",
+                    palette,
+                    view.segmented(
+                        "style",
+                        &["HTML 实体", "\\uXXXX", "CSS \\XXXXXX", "U+XXXX"],
+                        self.style,
+                        palette,
+                        cx,
+                        |view, idx| {
+                            if let Model::Standard(opt) = &mut view.model {
+                                opt.style = idx;
+                            }
+                        },
+                    ),
+                ));
+                groups.push(view.toggle_pill(
+                    "non-ascii",
+                    "仅非 ASCII",
+                    self.toggle,
+                    palette,
+                    cx,
+                    |view| {
+                        if let Model::Standard(opt) = &mut view.model {
+                            opt.toggle = !opt.toggle;
+                        }
+                    },
+                ));
+            }
+            ToolId::StringEscape => {
+                groups.push(option_group(
+                    "方向",
+                    palette,
+                    view.segmented(
+                        "escape-dir",
+                        &["转义", "反转义"],
+                        usize::from(self.reverse),
+                        palette,
+                        cx,
+                        |view, idx| {
+                            if let Model::Standard(opt) = &mut view.model {
+                                opt.reverse = idx == 1;
+                            }
+                        },
+                    ),
+                ));
+                groups.push(option_group(
+                    "语法风格",
+                    palette,
+                    view.segmented(
+                        "style",
+                        &["JSON", "C / Rust", "Shell POSIX", "Regex"],
+                        self.style,
+                        palette,
+                        cx,
+                        |view, idx| {
+                            if let Model::Standard(opt) = &mut view.model {
+                                opt.style = idx;
+                            }
+                        },
+                    ),
+                ));
+                groups.push(view.toggle_pill(
+                    "lines",
+                    "逐行处理",
+                    self.lines,
+                    palette,
+                    cx,
+                    |view| {
+                        if let Model::Standard(opt) = &mut view.model {
+                            opt.lines = !opt.lines;
+                        }
+                    },
+                ));
+            }
+            ToolId::GzipCompress => {
+                groups.push(option_group(
+                    "操作",
+                    palette,
+                    view.segmented(
+                        "gzip-action",
+                        &["GZip 压缩", "GZip 解压"],
+                        usize::from(self.reverse),
+                        palette,
+                        cx,
+                        |view, idx| {
+                            if let Model::Standard(opt) = &mut view.model {
+                                opt.reverse = idx == 1;
+                            }
+                        },
+                    ),
+                ));
+                groups.push(option_group(
+                    "编码载体",
+                    palette,
+                    view.segmented(
+                        "transport",
+                        &["Base64", "Hex"],
+                        self.style,
+                        palette,
+                        cx,
+                        |view, idx| {
+                            if let Model::Standard(opt) = &mut view.model {
+                                opt.style = idx;
+                            }
+                        },
+                    ),
+                ));
+                if !self.reverse {
+                    groups.push(option_group(
+                        "压缩等级",
+                        palette,
+                        view.segmented(
+                            "gzip-level",
+                            &["1", "2", "3", "4", "5", "6", "7", "8", "9"],
+                            (self.level.clamp(1, 9) - 1) as usize,
+                            palette,
+                            cx,
+                            |view, idx| {
+                                if let Model::Standard(opt) = &mut view.model {
+                                    opt.level = (idx + 1) as u32;
+                                }
+                            },
+                        ),
                     ));
                 }
             }
             ToolId::JsonFormatter => {
-                toggle!(reverse, "压缩（关闭为美化）");
-                choices!(indent, ["缩进 2", "缩进 4", "Tab"]);
-                toggle!(toggle, "排序键");
+                groups.push(option_group(
+                    "模式",
+                    palette,
+                    view.segmented(
+                        "json-mode",
+                        &["美化排版", "单行压缩"],
+                        usize::from(self.reverse),
+                        palette,
+                        cx,
+                        |view, idx| {
+                            if let Model::Standard(opt) = &mut view.model {
+                                opt.reverse = idx == 1;
+                            }
+                        },
+                    ),
+                ));
+                if !self.reverse {
+                    groups.push(option_group(
+                        "缩进",
+                        palette,
+                        view.segmented(
+                            "indent",
+                            &["2 空格", "4 空格", "Tab"],
+                            self.indent,
+                            palette,
+                            cx,
+                            |view, idx| {
+                                if let Model::Standard(opt) = &mut view.model {
+                                    opt.indent = idx;
+                                }
+                            },
+                        ),
+                    ));
+                }
+                groups.push(view.toggle_pill(
+                    "sort-keys",
+                    "键字典序重排",
+                    self.toggle,
+                    palette,
+                    cx,
+                    |view| {
+                        if let Model::Standard(opt) = &mut view.model {
+                            opt.toggle = !opt.toggle;
+                        }
+                    },
+                ));
             }
             ToolId::SqlFormatter => {
-                choices!(style, ["Upper", "Lower", "Preserve"]);
-                toggle!(reverse, "Compact（关闭为 Expanded）");
-                choices!(indent, ["缩进 2", "缩进 4"]);
+                groups.push(option_group(
+                    "布局",
+                    palette,
+                    view.segmented(
+                        "sql-layout",
+                        &["展开美化", "紧凑单行"],
+                        usize::from(self.reverse),
+                        palette,
+                        cx,
+                        |view, idx| {
+                            if let Model::Standard(opt) = &mut view.model {
+                                opt.reverse = idx == 1;
+                            }
+                        },
+                    ),
+                ));
+                groups.push(option_group(
+                    "关键字",
+                    palette,
+                    view.segmented(
+                        "sql-case",
+                        &["大写", "小写", "保留原样"],
+                        self.style,
+                        palette,
+                        cx,
+                        |view, idx| {
+                            if let Model::Standard(opt) = &mut view.model {
+                                opt.style = idx;
+                            }
+                        },
+                    ),
+                ));
+                if !self.reverse {
+                    groups.push(option_group(
+                        "缩进",
+                        palette,
+                        view.segmented(
+                            "sql-indent",
+                            &["2 空格", "4 空格"],
+                            self.indent,
+                            palette,
+                            cx,
+                            |view, idx| {
+                                if let Model::Standard(opt) = &mut view.model {
+                                    opt.indent = idx;
+                                }
+                            },
+                        ),
+                    ));
+                }
             }
             ToolId::XmlHtmlFormatter => {
-                choices!(style, ["Auto", "XML", "HTML"]);
-                toggle!(reverse, "压缩（关闭为美化）");
-                choices!(indent, ["缩进 2", "缩进 4", "Tab"]);
+                groups.push(option_group(
+                    "语言",
+                    palette,
+                    view.segmented(
+                        "markup-lang",
+                        &["自动识别", "XML", "HTML"],
+                        self.style,
+                        palette,
+                        cx,
+                        |view, idx| {
+                            if let Model::Standard(opt) = &mut view.model {
+                                opt.style = idx;
+                            }
+                        },
+                    ),
+                ));
+                groups.push(option_group(
+                    "模式",
+                    palette,
+                    view.segmented(
+                        "markup-mode",
+                        &["美化排版", "紧凑压缩"],
+                        usize::from(self.reverse),
+                        palette,
+                        cx,
+                        |view, idx| {
+                            if let Model::Standard(opt) = &mut view.model {
+                                opt.reverse = idx == 1;
+                            }
+                        },
+                    ),
+                ));
+                if !self.reverse {
+                    groups.push(option_group(
+                        "缩进",
+                        palette,
+                        view.segmented(
+                            "markup-indent",
+                            &["2 空格", "4 空格", "Tab"],
+                            self.indent,
+                            palette,
+                            cx,
+                            |view, idx| {
+                                if let Model::Standard(opt) = &mut view.model {
+                                    opt.indent = idx;
+                                }
+                            },
+                        ),
+                    ));
+                }
             }
             _ => (),
         }
-        bar.into_any_element()
+
+        options_bar(palette, groups)
     }
 }

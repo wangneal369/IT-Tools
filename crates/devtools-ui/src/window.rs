@@ -13,6 +13,30 @@ use crate::workspace::{
     PendingWake, Phase, Workbench, geometry_from_bounds, window_bounds_from_state,
 };
 
+/// Whether opening a window requires transitioning GPUI out of `Headless` first.
+///
+/// - Windows & Linux: `cx.graphical_environment().is_none()` is the exact
+///   ground truth of whether GPU / display server is currently detached.
+///   Never OR with `phase == DeepSleep`: on normal launch GPUI starts already
+///   `Windowed`, where `request_windowing(Windowed)` errors with `"already windowed"`.
+/// - macOS: GPUI implements `request_windowing(Windowed)` as switching
+///   `ActivationPolicy::Regular`, and reports `graphical_environment() == None`
+///   whenever `ActivationPolicy::Accessory` is active. Under
+///   [`MacosDockPolicy::MenuBarOnly`], the app deliberately stays `Accessory`
+///   even with a window open, so we must NOT call `request_windowing(Windowed)`
+///   (which would force the Dock icon visible).
+pub(crate) fn needs_windowing_reattach(cx: &App, dock_policy: MacosDockPolicy) -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        dock_policy != MacosDockPolicy::MenuBarOnly && cx.graphical_environment().is_none()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = dock_policy;
+        cx.graphical_environment().is_none()
+    }
+}
+
 /// Raise the window and focus it; creates or re-attaches it as needed.
 ///
 /// Re-attachment from `DeepSleep` (`WindowingRequest::Headless`) is serialized
@@ -28,9 +52,8 @@ pub fn show(workbench: &Entity<Workbench>, cx: &mut App, open_settings: bool) {
         state.settings().platform.macos_dock_policy
     });
 
-    set_macos_policy(cx, dock_policy, true);
-
     if let Some(handle) = workbench.read(cx).active_window {
+        set_macos_policy(cx, dock_policy, true);
         let focused = handle
             .update(cx, |_, window, cx| {
                 window.activate_window();
@@ -48,9 +71,10 @@ pub fn show(workbench: &Entity<Workbench>, cx: &mut App, open_settings: bool) {
         workbench.update(cx, |state, _| state.active_window = None);
     }
 
-    let needs_reattach =
-        cx.graphical_environment().is_none() || workbench.read(cx).phase() == Phase::DeepSleep;
-    if needs_reattach {
+    // Check BEFORE calling `set_macos_policy(..., true)`: on macOS, switching
+    // `ActivationPolicy` to `Regular` upfront would cause a subsequent
+    // `request_windowing(Windowed)` call to fail with `"already windowed"`.
+    if needs_windowing_reattach(cx, dock_policy) {
         // Coalesce duplicate wake requests while a display reattach is in flight.
         if workbench.read(cx).pending_wake.is_some() {
             workbench.update(cx, |state, _| {
@@ -70,15 +94,19 @@ pub fn show(workbench: &Entity<Workbench>, cx: &mut App, open_settings: bool) {
                 let Some(workbench) = weak.upgrade() else {
                     return;
                 };
-                let merged_open_settings = workbench.update(cx, |state, _| {
-                    state
-                        .pending_wake
-                        .take()
-                        .map(|pending| pending.open_settings)
-                        .unwrap_or(false)
+                let (merged_open_settings, policy) = workbench.update(cx, |state, _| {
+                    (
+                        state
+                            .pending_wake
+                            .take()
+                            .map(|pending| pending.open_settings)
+                            .unwrap_or(false),
+                        state.settings().platform.macos_dock_policy,
+                    )
                 });
                 match result {
                     Ok(()) => {
+                        set_macos_policy(cx, policy, true);
                         if merged_open_settings {
                             workbench.update(cx, |state, cx| state.open_settings(cx));
                         }
@@ -87,8 +115,19 @@ pub fn show(workbench: &Entity<Workbench>, cx: &mut App, open_settings: bool) {
                         }
                     }
                     Err(err) => {
+                        // Defensive recovery: if the platform is in fact already
+                        // windowed (e.g. concurrent transition), proceed to open.
+                        if cx.graphical_environment().is_some() {
+                            set_macos_policy(cx, policy, true);
+                            if merged_open_settings {
+                                workbench.update(cx, |state, cx| state.open_settings(cx));
+                            }
+                            if workbench.read(cx).active_window.is_none() {
+                                create_main_window(&workbench, cx);
+                            }
+                            return;
+                        }
                         eprintln!("[devtools] request_windowing(Windowed) failed: {err:#}");
-                        let policy = workbench.read(cx).settings().platform.macos_dock_policy;
                         set_macos_policy(cx, policy, false);
                         workbench.update(cx, |state, cx| {
                             state.phase = Phase::DeepSleep;
@@ -104,8 +143,11 @@ pub fn show(workbench: &Entity<Workbench>, cx: &mut App, open_settings: bool) {
                 _task: task,
             });
         });
-    } else if workbench.read(cx).active_window.is_none() {
-        create_main_window(workbench, cx);
+    } else {
+        set_macos_policy(cx, dock_policy, true);
+        if workbench.read(cx).active_window.is_none() {
+            create_main_window(workbench, cx);
+        }
     }
 }
 
@@ -159,12 +201,15 @@ pub fn ordered_quit(workbench: &Entity<Workbench>, cx: &mut App) {
 }
 
 fn create_main_window(workbench: &Entity<Workbench>, cx: &mut App) {
-    let bounds = {
+    let (bounds, settings_snapshot) = {
         let state = workbench.read(cx);
-        window_bounds_from_state(
-            &state.window_state,
-            state.settings().residency.wake_placement,
-            cx,
+        (
+            window_bounds_from_state(
+                &state.window_state,
+                state.settings().residency.wake_placement,
+                cx,
+            ),
+            state.settings().clone(),
         )
     };
 
@@ -179,13 +224,15 @@ fn create_main_window(workbench: &Entity<Workbench>, cx: &mut App) {
         focus: true,
         show: true,
         kind: WindowKind::Normal,
-        window_min_size: Some(size(px(320.0), px(240.0))),
+        window_min_size: Some(size(px(640.0), px(440.0))),
         ..Default::default()
     };
 
     let state_for_close = workbench.clone();
     let state_for_view = workbench.clone();
     let result = gpui_kit::open_window(options, cx, move |window, cx| {
+        crate::theme::sync_gpui_theme(&settings_snapshot, Some(window.appearance()), cx);
+
         let close_state = state_for_close.clone();
         // Zed #66369 guardrail: return false and explicitly remove the window.
         window.on_window_should_close(cx, move |window, cx| {

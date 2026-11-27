@@ -296,4 +296,27 @@ c",
         assert!(out.output.contains("50000"));
         assert!(out.footer.contains("截断"));
     }
+
+    #[test]
+    fn all_twenty_eight_sample_payloads_execute_cleanly() {
+        for tool in ToolId::ALL {
+            let sample = crate::samples::sample_for(tool);
+            let inputs = Inputs {
+                text: sample.text,
+                second: sample.second,
+                query: sample.query,
+                replacement: sample.replacement,
+                secret: sample.secret,
+                expected: sample.expected,
+                ..Inputs::default()
+            };
+            let result = Model::new(tool)
+                .execute(&inputs, &CancelFlag::new(), true)
+                .unwrap_or_else(|err| panic!("sample for {tool:?} failed: {err}"));
+            assert!(
+                !result.output.is_empty(),
+                "sample for {tool:?} produced empty output"
+            );
+        }
+    }
 }

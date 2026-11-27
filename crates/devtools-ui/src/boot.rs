@@ -66,6 +66,7 @@ pub fn run(boot: AppBoot) {
     let global_shortcut = settings.hotkeys.global_toggle.clone();
 
     let app = gpui_kit::application()
+        .with_assets(crate::icons::WorkbenchAssets)
         .with_quit_mode(QuitMode::Explicit)
         .with_windowing(initial_windowing);
 
@@ -78,6 +79,7 @@ pub fn run(boot: AppBoot) {
 
     app.run(move |cx| {
         gpui_kit::init(cx);
+        crate::theme::sync_gpui_theme(&settings, None, cx);
 
         let platform = PlatformService::start(PlatformStartup {
             instance,

@@ -293,7 +293,7 @@ impl Render for PlaceholderToolView {
             .output
             .as_ref()
             .map(payload_preview)
-            .unwrap_or_else(|| "工具计算内核将在 M4 接入".into());
+            .unwrap_or_else(|| "等待工具视图初始化".into());
         let body = match split {
             SplitMode::Single => div().flex_1().p_3().child(single_pane(
                 palette,

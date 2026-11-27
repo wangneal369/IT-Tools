@@ -1,5 +1,7 @@
 //! Dedicated conversion, codec and generator controllers.
 
+use std::sync::Arc;
+
 use devtools_core::{CancelFlag, RawPayload, ToolError, ToolErrorKind, ToolId, ToolLaunchInput};
 use devtools_tools::{
     conversion::{color, datetime, json_table, number_base},
@@ -9,7 +11,8 @@ use devtools_tools::{
 use gpui_kit::*;
 
 use super::Model;
-use super::runtime::{Inputs, Slot, ToolResult, ToolView};
+use super::runtime::{Inputs, Slot, ToolResult, ToolView, WcagSummary, option_group, options_bar};
+use crate::icons::{IconName, icon_el};
 use crate::theme::Palette;
 
 #[derive(Clone)]
@@ -80,6 +83,15 @@ const ZONES: [&str; 5] = [
     "Europe/London",
 ];
 
+const COLOR_PRESETS: &[(&str, &str, u32)] = &[
+    ("蓝", "#3b82f6", 0x3b82f6),
+    ("绿", "#10b981", 0x10b981),
+    ("琥珀", "#f59e0b", 0xf59e0b),
+    ("红", "#ef4444", 0xef4444),
+    ("紫", "#8b5cf6", 0x8b5cf6),
+    ("深墨", "#0f172a", 0x0f172a),
+];
+
 fn io_error(error: std::io::Error) -> ToolError {
     ToolError::new(ToolErrorKind::Io, error.to_string())
 }
@@ -124,7 +136,7 @@ impl ConverterOptions {
                 base: 0,
                 custom: 36,
                 bits: 0,
-                uppercase: false,
+                uppercase: true,
                 prefixes: true,
                 group: false,
             },
@@ -206,16 +218,16 @@ impl ConverterOptions {
                     ][*unit],
                 })?;
                 ToolResult::rows(vec![
-                    ("Local".into(), out.local),
+                    ("本地时间".into(), out.local),
                     ("UTC / ISO 8601".into(), out.utc),
-                    (out.timezone_name, out.timezone),
-                    ("Unix 秒".into(), out.unix_seconds.to_string()),
-                    ("Unix 毫秒".into(), out.unix_millis.to_string()),
-                    ("Unix 微秒".into(), out.unix_micros.to_string()),
-                    ("Unix 纳秒".into(), out.unix_nanos.to_string()),
+                    (format!("时区 ({})", out.timezone_name), out.timezone),
+                    ("Unix 秒 (s)".into(), out.unix_seconds.to_string()),
+                    ("Unix 毫秒 (ms)".into(), out.unix_millis.to_string()),
+                    ("Unix 微秒 (μs)".into(), out.unix_micros.to_string()),
+                    ("Unix 纳秒 (ns)".into(), out.unix_nanos.to_string()),
                     (
                         "星期 / ISO 周".into(),
-                        format!("{} / {}", out.weekday, out.iso_week),
+                        format!("{} · {}", out.weekday, out.iso_week),
                     ),
                 ])
             }
@@ -241,15 +253,28 @@ impl ConverterOptions {
                     prefixes: *prefixes,
                     group: *group,
                 })?;
-                ToolResult::rows(vec![
-                    ("BIN · 2".into(), out.binary),
-                    ("OCT · 8".into(), out.octal),
-                    ("DEC · 10".into(), out.decimal),
-                    ("HEX · 16".into(), out.hexadecimal),
-                    (format!("自定义 · {custom}"), out.custom.unwrap_or_default()),
-                    ("有符号值".into(), out.signed_value),
-                    ("有效位数".into(), out.bits.to_string()),
-                ])
+                let mut result = ToolResult::rows(vec![
+                    ("二进制 (BIN · 2)".into(), out.binary),
+                    ("八进制 (OCT · 8)".into(), out.octal),
+                    ("十进制 (DEC · 10)".into(), out.decimal),
+                    ("十六进制 (HEX · 16)".into(), out.hexadecimal),
+                    (
+                        format!("自定义 ({custom} 进制)"),
+                        out.custom.unwrap_or_default(),
+                    ),
+                    ("有符号十进制".into(), out.signed_value),
+                    ("有效位宽".into(), format!("{} bits", out.bits)),
+                ]);
+                result.footer = format!(
+                    "源进制：{} · 有效位宽 {} bits",
+                    if *base == 0 {
+                        "自动识别".to_owned()
+                    } else {
+                        format!("{base} 进制")
+                    },
+                    out.bits
+                );
+                result
             }
             Self::Color => {
                 let out = color::convert(&color::ColorConverterRequest { input: text })?;
@@ -261,22 +286,29 @@ impl ConverterOptions {
                     ("HWB".into(), out.hwb),
                     ("OKLCH".into(), out.oklch),
                     ("CMYK".into(), out.cmyk),
-                    ("Alpha".into(), format!("{}%", out.alpha_percent)),
+                    ("不透明度 Alpha".into(), format!("{}%", out.alpha_percent)),
                 ]);
-                for (background, contrast) in
-                    [("#FFF", out.against_white), ("#000", out.against_black)]
-                {
-                    result.rows.push((
-                        format!("WCAG {background}"),
-                        format!(
-                            "{:.2}:1 · AA {} · AAA {}",
-                            contrast.ratio,
-                            if contrast.aa { "✓" } else { "×" },
-                            if contrast.aaa { "✓" } else { "×" }
-                        ),
-                    ));
-                }
+                result.wcag = vec![
+                    WcagSummary {
+                        label: "#FFFFFF 浅底",
+                        bg_hex: 0xffffff,
+                        ratio: out.against_white.ratio,
+                        aa: out.against_white.aa,
+                        aaa: out.against_white.aaa,
+                    },
+                    WcagSummary {
+                        label: "#000000 深底",
+                        bg_hex: 0x000000,
+                        ratio: out.against_black.ratio,
+                        aa: out.against_black.aa,
+                        aaa: out.against_black.aaa,
+                    },
+                ];
                 result.swatch = Some((u32::from(r) << 16) | (u32::from(g) << 8) | u32::from(b));
+                result.footer = format!(
+                    "RGB({r}, {g}, {b}) · 对比度 白 {:.2}:1 / 黑 {:.2}:1",
+                    out.against_white.ratio, out.against_black.ratio
+                );
                 result
             }
             Self::Table {
@@ -436,7 +468,7 @@ impl ConverterOptions {
                     rows,
                     table: (*mode == 0).then(|| {
                         (
-                            vec!["Query Key".into(), "Value（保序，允许同名）".into()],
+                            vec!["Query Key".into(), "Value（保序，支持同名重复键）".into()],
                             out.params
                                 .into_iter()
                                 .map(|p| vec![p.key, p.value])
@@ -475,20 +507,26 @@ impl ConverterOptions {
                     Some(cancel),
                 )?;
                 let mut result = ToolResult::text(out.output);
+                result.footer = format!("已生成 {count} 个标识符");
                 if !inputs.text.trim().is_empty() {
                     let info = uuid_ulid::inspect(inputs.text.trim())?;
                     result.rows = vec![
-                        ("生成结果".into(), result.output.clone()),
-                        ("Inspector".into(), info.format),
+                        ("批量生成结果".into(), result.output.clone()),
+                        ("反解格式".into(), info.format),
                         (
-                            "Version".into(),
-                            info.version.map(|v| v.to_string()).unwrap_or_default(),
+                            "版本号".into(),
+                            info.version
+                                .map(|v| format!("v{v}"))
+                                .unwrap_or_else(|| "—".into()),
                         ),
                         (
-                            "Timestamp".into(),
-                            info.timestamp.unwrap_or_else(|| "无时间戳".into()),
+                            "嵌入时间戳".into(),
+                            info.timestamp.unwrap_or_else(|| "无内嵌时间戳".into()),
                         ),
-                        ("NIL".into(), info.is_nil.to_string()),
+                        (
+                            "是否全零 NIL".into(),
+                            if info.is_nil { "是" } else { "否" }.into(),
+                        ),
                     ];
                 }
                 result
@@ -541,11 +579,11 @@ impl ConverterOptions {
                         .first()
                         .map(|s| {
                             format!(
-                                "香农熵 {:.1} bits · zxcvbn {} / 4 · {}",
+                                "香农熵 {:.1} bits · zxcvbn {} / 4 · 估算破解耗时 {}",
                                 s.shannon_bits, s.zxcvbn_score, s.crack_time
                             )
                         })
-                        .unwrap_or_else(|| format!("敏感 Token · {bytes} bytes")),
+                        .unwrap_or_else(|| format!("加密安全随机 Token · {bytes} 字节")),
                     ..ToolResult::default()
                 }
             }
@@ -570,7 +608,7 @@ impl ConverterOptions {
                         qr::decode(&qr::QrDecodeRequest { image_bytes: bytes }, Some(cancel))?;
                     ToolResult {
                         output: out.text,
-                        footer: format!("解码成功 · {}", out.preprocessing),
+                        footer: format!("二维码解码成功 · 预处理阶段：{}", out.preprocessing),
                         ..ToolResult::default()
                     }
                 } else {
@@ -602,8 +640,8 @@ impl ConverterOptions {
                         output: out.svg,
                         image: Some(Arc::from(out.png)),
                         footer: format!(
-                            "QR v{} · {} 模块 · SVG 全量复制",
-                            out.version, out.module_count
+                            "QR 版本 v{} · {}×{} 模块 · 下方为矢量 SVG 源码",
+                            out.version, out.module_count, out.module_count
                         ),
                         ..ToolResult::default()
                     }
@@ -612,52 +650,118 @@ impl ConverterOptions {
         })
     }
 
-    pub fn inputs(&self, view: &ToolView) -> AnyElement {
-        let mut inputs = div().flex().flex_col().gap_3();
+    pub fn inputs(&self, view: &ToolView, palette: Palette, _cx: &Context<ToolView>) -> AnyElement {
+        let mut stack = div()
+            .flex_1()
+            .min_h_0()
+            .min_w_0()
+            .size_full()
+            .flex()
+            .flex_col();
+
         match self {
             Self::Password { token, .. } => {
                 if !token {
-                    inputs = inputs.child(view.field(Slot::Query, "自定义符号（留空使用默认）"));
+                    stack = stack.child(view.inline_field(
+                        Slot::Query,
+                        "自定义符号集（留空使用默认安全特殊符号）",
+                        palette,
+                    ));
                 }
+                stack = stack.child(
+                    div()
+                        .flex_1()
+                        .min_h_0()
+                        .p_4()
+                        .flex()
+                        .flex_col()
+                        .justify_center()
+                        .gap_2()
+                        .text_xs()
+                        .text_color(rgb(palette.muted))
+                        .child("密码与随机 Token 由操作系统密码学安全随机源（CSPRNG）实时生成。")
+                        .child("调整上方长度、字符集或点击「重新生成」即可刷新；复制时默认写入剪贴板历史排除标记。"),
+                );
             }
             Self::Uuid { .. } => {
-                inputs =
-                    inputs.child(view.field(Slot::Text, "Inspector · 粘贴 UUID / ULID（可选）"))
+                stack = stack
+                    .child(
+                        div()
+                            .flex_shrink_0()
+                            .px_3()
+                            .py_1p5()
+                            .bg(rgb(palette.panel_alt))
+                            .border_b_1()
+                            .border_color(rgb(palette.border))
+                            .text_size(px(11.0))
+                            .text_color(rgb(palette.muted))
+                            .child("可选反解区：粘贴任意 UUID 或 ULID 可实时提取版本与内嵌时间戳"),
+                    )
+                    .child(view.full_editor(Slot::Text));
             }
             Self::Base64 {
                 data_uri: true,
                 decode: false,
                 ..
             } => {
-                inputs = inputs
-                    .child(view.field(Slot::Query, "文件路径（可选；支持拖放 / 智能粘贴图片）"))
-                    .child(view.field(Slot::Text, "文本（未选择文件时）"));
+                stack = stack
+                    .child(view.inline_field(
+                        Slot::Query,
+                        "本地图片 / 文件路径（可选，支持直接拖放文件到窗口）",
+                        palette,
+                    ))
+                    .child(view.full_editor(Slot::Text));
             }
             Self::Qr { mode: 3, .. } => {
-                inputs =
-                    inputs.child(view.field(Slot::Query, "待解码图片文件路径（或智能粘贴图片）"))
+                stack = stack
+                    .child(view.inline_field(
+                        Slot::Query,
+                        "待解码二维码图片路径（或拖放图片 / Ctrl+Shift+V 粘贴截图）",
+                        palette,
+                    ))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_h_0()
+                            .p_4()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .text_xs()
+                            .text_color(rgb(palette.muted))
+                            .child(
+                                "支持 PNG / JPEG / WebP 二维码原图、反色与窄白边自动三级预处理解码",
+                            ),
+                    );
             }
             Self::Qr { mode: 2, .. } => {
-                inputs = inputs
-                    .child(view.field(Slot::Text, "WiFi SSID"))
-                    .child(view.field(Slot::Secret, "WiFi 密码"))
+                stack = stack
+                    .child(view.inline_field(Slot::Secret, "WiFi 密码（仅驻内存）", palette))
+                    .child(view.full_editor(Slot::Text));
             }
             Self::Url { mode: 0, .. } => {
-                inputs = inputs
-                    .child(view.field(
+                stack = stack
+                    .child(view.inline_field(
                         Slot::Query,
-                        "Query 编辑（key=value&key=value，保留重复键；留空使用 URL）",
+                        "Query 覆写编辑（key=value&key=value，保序且保留同名键；留空直接解析下方 URL）",
+                        palette,
                     ))
-                    .child(view.field(Slot::Text, "URL"));
+                    .child(view.full_editor(Slot::Text));
             }
             Self::Table { .. } => {
-                inputs = inputs
-                    .child(view.field(Slot::Query, "拍平分隔符（默认 .）"))
-                    .child(view.field(Slot::Text, "JSON 输入"))
+                stack = stack
+                    .child(view.inline_field(
+                        Slot::Query,
+                        "嵌套对象拍平分隔符（默认为 .）",
+                        palette,
+                    ))
+                    .child(view.full_editor(Slot::Text));
             }
-            _ => inputs = inputs.child(view.field(Slot::Text, "输入（支持智能粘贴 / 工具接力）")),
+            _ => {
+                stack = stack.child(view.full_editor(Slot::Text));
+            }
         }
-        inputs.into_any_element()
+        stack.into_any_element()
     }
 
     pub fn controls(
@@ -666,72 +770,49 @@ impl ConverterOptions {
         palette: Palette,
         cx: &Context<ToolView>,
     ) -> AnyElement {
-        let mut bar = div().flex().flex_wrap().gap_2().p_2();
-        macro_rules! choices {
-            ($variant:ident, $field:ident, $value:expr, $labels:expr) => {
-                for (index, label) in $labels.into_iter().enumerate() {
-                    bar = bar.child(view.chip(
-                        &format!("{}-{index}", stringify!($field)),
-                        label,
-                        *$value == index,
+        let mut groups: Vec<AnyElement> = Vec::new();
+
+        match self {
+            Self::Date { unit, zone } => {
+                groups.push(option_group(
+                    "时间戳单位",
+                    palette,
+                    view.segmented(
+                        "dt-unit",
+                        &["自动判定", "秒 (s)", "毫秒 (ms)", "微秒 (μs)", "纳秒 (ns)"],
+                        *unit,
                         palette,
                         cx,
-                        move |view| {
-                            if let Model::Converter(Self::$variant { $field, .. }) = &mut view.model
-                            {
-                                *$field = index;
+                        |view, idx| {
+                            if let Model::Converter(Self::Date { unit, .. }) = &mut view.model {
+                                *unit = idx;
                             }
                         },
-                    ));
-                }
-            };
-        }
-        macro_rules! toggle {
-            ($variant:ident, $field:ident, $value:expr, $label:expr) => {
-                bar = bar.child(view.chip(
-                    stringify!($field),
-                    $label,
-                    *$value,
+                    ),
+                ));
+                groups.push(option_group(
+                    "目标时区",
+                    palette,
+                    view.segmented("dt-zone", &ZONES, *zone, palette, cx, |view, idx| {
+                        if let Model::Converter(Self::Date { zone, .. }) = &mut view.model {
+                            *zone = idx;
+                        }
+                    }),
+                ));
+                groups.push(view.action_pill(
+                    "now",
+                    Some(IconName::Clock),
+                    "填入当前时间",
                     palette,
                     cx,
                     |view| {
-                        if let Model::Converter(Self::$variant { $field, .. }) = &mut view.model {
-                            *$field = !*$field;
-                        }
+                        view.inputs.text = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_secs()
+                            .to_string();
                     },
                 ));
-            };
-        }
-        macro_rules! numeric {
-            ($variant:ident,$field:ident,$value:expr,$values:expr,$label:expr) => {
-                for value in $values {
-                    bar = bar.child(view.chip(
-                        &format!("{}-{value}", stringify!($field)),
-                        format!("{} {value}", $label),
-                        *$value == value,
-                        palette,
-                        cx,
-                        move |view| {
-                            if let Model::Converter(Self::$variant { $field, .. }) = &mut view.model
-                            {
-                                *$field = value;
-                            }
-                        },
-                    ));
-                }
-            };
-        }
-        match self {
-            Self::Date { unit, zone } => {
-                choices!(Date, unit, unit, ["自动单位", "秒", "毫秒", "微秒", "纳秒"]);
-                choices!(Date, zone, zone, ZONES);
-                bar = bar.child(view.chip("now", "Now", false, palette, cx, |view| {
-                    view.inputs.text = std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap_or_default()
-                        .as_secs()
-                        .to_string();
-                }));
             }
             Self::Number {
                 base,
@@ -741,66 +822,196 @@ impl ConverterOptions {
                 prefixes,
                 group,
             } => {
-                numeric!(Number, base, base, [0, 2, 8, 10, 16], "源");
-                for delta in [-1i16, 1] {
-                    bar = bar.child(view.chip(
-                        &format!("base-step-{delta}"),
-                        format!("源进制 {}", if delta < 0 { "−" } else { "+" }),
-                        false,
+                let preset_bases: [u8; 5] = [0, 2, 8, 10, 16];
+                let selected_preset = preset_bases
+                    .iter()
+                    .position(|b| b == base)
+                    .unwrap_or(usize::MAX);
+                groups.push(option_group(
+                    "源进制",
+                    palette,
+                    view.segmented(
+                        "num-base",
+                        &["自动", "BIN", "OCT", "DEC", "HEX"],
+                        selected_preset,
                         palette,
                         cx,
-                        move |view| {
+                        move |view, idx| {
                             if let Model::Converter(Self::Number { base, .. }) = &mut view.model {
-                                *base = (i16::from(*base) + delta).clamp(2, 36) as u8;
+                                *base = preset_bases[idx];
                             }
                         },
-                    ));
-                }
-                bar = bar.child(
+                    ),
+                ));
+                let custom_val = *custom;
+                groups.push(option_group(
+                    "自定义",
+                    palette,
                     div()
-                        .text_xs()
-                        .child(format!("源 {base} · 额外 {custom} 进制")),
-                );
-                for delta in [-1i16, 1] {
-                    bar = bar.child(view.chip(
-                        &format!("custom-step-{delta}"),
-                        format!("额外 {}", if delta < 0 { "−" } else { "+" }),
-                        false,
+                        .flex()
+                        .items_center()
+                        .gap_1()
+                        .child(view.action_pill(
+                            "custom-minus",
+                            Some(IconName::Minus),
+                            "",
+                            palette,
+                            cx,
+                            |view| {
+                                if let Model::Converter(Self::Number { custom, .. }) =
+                                    &mut view.model
+                                {
+                                    *custom = custom.saturating_sub(1).clamp(2, 36);
+                                }
+                            },
+                        ))
+                        .child(
+                            div()
+                                .px_1p5()
+                                .text_size(px(11.5))
+                                .font_weight(FontWeight::MEDIUM)
+                                .text_color(rgb(palette.accent))
+                                .child(format!("{custom_val}进制")),
+                        )
+                        .child(view.action_pill(
+                            "custom-plus",
+                            Some(IconName::Plus),
+                            "",
+                            palette,
+                            cx,
+                            |view| {
+                                if let Model::Converter(Self::Number { custom, .. }) =
+                                    &mut view.model
+                                {
+                                    *custom = custom.saturating_add(1).clamp(2, 36);
+                                }
+                            },
+                        )),
+                ));
+                groups.push(option_group(
+                    "位宽",
+                    palette,
+                    view.segmented(
+                        "num-bits",
+                        &["任意精度", "8b", "16b", "32b", "64b"],
+                        *bits,
                         palette,
                         cx,
-                        move |view| {
-                            if let Model::Converter(Self::Number { custom, .. }) = &mut view.model {
-                                *custom = (i16::from(*custom) + delta).clamp(2, 36) as u8;
+                        |view, idx| {
+                            if let Model::Converter(Self::Number { bits, .. }) = &mut view.model {
+                                *bits = idx;
                             }
                         },
-                    ));
-                }
-                choices!(
-                    Number,
-                    bits,
-                    bits,
-                    ["数学有符号", "补码 8", "补码 16", "补码 32", "补码 64"]
+                    ),
+                ));
+                groups.push(view.toggle_pill(
+                    "num-upper",
+                    "大写",
+                    *uppercase,
+                    palette,
+                    cx,
+                    |view| {
+                        if let Model::Converter(Self::Number { uppercase, .. }) = &mut view.model {
+                            *uppercase = !*uppercase;
+                        }
+                    },
+                ));
+                groups.push(view.toggle_pill(
+                    "num-prefix",
+                    "前缀",
+                    *prefixes,
+                    palette,
+                    cx,
+                    |view| {
+                        if let Model::Converter(Self::Number { prefixes, .. }) = &mut view.model {
+                            *prefixes = !*prefixes;
+                        }
+                    },
+                ));
+                groups.push(
+                    view.toggle_pill("num-group", "分组", *group, palette, cx, |view| {
+                        if let Model::Converter(Self::Number { group, .. }) = &mut view.model {
+                            *group = !*group;
+                        }
+                    }),
                 );
-                toggle!(Number, uppercase, uppercase, "大写");
-                toggle!(Number, prefixes, prefixes, "前缀");
-                toggle!(Number, group, group, "分组");
             }
             Self::Color => {
-                bar = bar.child(view.color_picker());
-                bar = bar.child(
-                    div()
-                        .text_xs()
-                        .child("CSS Color 4 · 点击结果行复制 · WCAG AA / AAA"),
-                );
+                groups.push(option_group("拾色", palette, view.color_picker()));
+                let mut presets = div().flex().items_center().gap_1p5();
+                for &(name, hex_str, hex_rgb) in COLOR_PRESETS {
+                    presets = presets.child(
+                        div()
+                            .id(format!("color-preset-{name}"))
+                            .h(px(24.0))
+                            .px_2()
+                            .rounded_md()
+                            .cursor_pointer()
+                            .flex()
+                            .items_center()
+                            .gap_1p5()
+                            .bg(rgb(palette.panel))
+                            .border_1()
+                            .border_color(rgb(palette.border))
+                            .hover(move |s| s.bg(rgb(palette.hover)))
+                            .text_size(px(11.0))
+                            .text_color(rgb(palette.muted))
+                            .child(
+                                div()
+                                    .w(px(11.0))
+                                    .h(px(11.0))
+                                    .rounded_full()
+                                    .bg(rgb(hex_rgb)),
+                            )
+                            .child(name)
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.inputs.text = hex_str.to_owned();
+                                this.trigger_option_change(true, cx);
+                            })),
+                    );
+                }
+                groups.push(option_group("预设色板", palette, presets));
             }
             Self::Table {
                 format,
                 flatten,
                 bom,
             } => {
-                choices!(Table, format, format, ["Table", "CSV", "TSV", "Markdown"]);
-                toggle!(Table, flatten, flatten, "拍平对象");
-                toggle!(Table, bom, bom, "UTF-8 BOM");
+                groups.push(option_group(
+                    "视图与导出格式",
+                    palette,
+                    view.segmented(
+                        "tbl-fmt",
+                        &["交互表格", "CSV", "TSV", "Markdown"],
+                        *format,
+                        palette,
+                        cx,
+                        |view, idx| {
+                            if let Model::Converter(Self::Table { format, .. }) = &mut view.model {
+                                *format = idx;
+                            }
+                        },
+                    ),
+                ));
+                groups.push(view.toggle_pill(
+                    "tbl-flatten",
+                    "点号拍平嵌套对象",
+                    *flatten,
+                    palette,
+                    cx,
+                    |view| {
+                        if let Model::Converter(Self::Table { flatten, .. }) = &mut view.model {
+                            *flatten = !*flatten;
+                        }
+                    },
+                ));
+                groups.push(
+                    view.toggle_pill("tbl-bom", "UTF-8 BOM", *bom, palette, cx, |view| {
+                        if let Model::Converter(Self::Table { bom, .. }) = &mut view.model {
+                            *bom = !*bom;
+                        }
+                    }),
+                );
             }
             Self::Base64 {
                 decode,
@@ -809,11 +1020,75 @@ impl ConverterOptions {
                 padding,
                 lines,
             } => {
-                toggle!(Base64, decode, decode, "解码（关闭为编码）");
-                toggle!(Base64, data_uri, data_uri, "Data URI");
-                toggle!(Base64, url_safe, url_safe, "URL-safe");
-                toggle!(Base64, padding, padding, "= 填充");
-                toggle!(Base64, lines, lines, "逐行");
+                groups.push(option_group(
+                    "方向",
+                    palette,
+                    view.segmented(
+                        "b64-mode",
+                        &["编码", "解码"],
+                        usize::from(*decode),
+                        palette,
+                        cx,
+                        |view, idx| {
+                            if let Model::Converter(Self::Base64 { decode, .. }) = &mut view.model {
+                                *decode = idx == 1;
+                            }
+                        },
+                    ),
+                ));
+                groups.push(option_group(
+                    "字符集",
+                    palette,
+                    view.segmented(
+                        "b64-alphabet",
+                        &["标准 (+/)", "URL-Safe (-_)"],
+                        usize::from(*url_safe),
+                        palette,
+                        cx,
+                        |view, idx| {
+                            if let Model::Converter(Self::Base64 { url_safe, .. }) = &mut view.model
+                            {
+                                *url_safe = idx == 1;
+                            }
+                        },
+                    ),
+                ));
+                groups.push(view.toggle_pill(
+                    "b64-data-uri",
+                    "Data URI",
+                    *data_uri,
+                    palette,
+                    cx,
+                    |view| {
+                        if let Model::Converter(Self::Base64 { data_uri, .. }) = &mut view.model {
+                            *data_uri = !*data_uri;
+                        }
+                    },
+                ));
+                groups.push(view.toggle_pill(
+                    "b64-pad",
+                    "= 填充",
+                    *padding,
+                    palette,
+                    cx,
+                    |view| {
+                        if let Model::Converter(Self::Base64 { padding, .. }) = &mut view.model {
+                            *padding = !*padding;
+                        }
+                    },
+                ));
+                groups.push(view.toggle_pill(
+                    "b64-lines",
+                    "逐行处理",
+                    *lines,
+                    palette,
+                    cx,
+                    |view| {
+                        if let Model::Converter(Self::Base64 { lines, .. }) = &mut view.model {
+                            *lines = !*lines;
+                        }
+                    },
+                ));
             }
             Self::Url {
                 mode,
@@ -821,10 +1096,70 @@ impl ConverterOptions {
                 plus,
                 lines,
             } => {
-                choices!(Url, mode, mode, ["Parse", "Encode", "Decode"]);
-                toggle!(Url, component, component, "组件级");
-                toggle!(Url, plus, plus, "空格 +（关闭为 %20）");
-                toggle!(Url, lines, lines, "逐行");
+                groups.push(option_group(
+                    "功能",
+                    palette,
+                    view.segmented(
+                        "url-mode",
+                        &["结构拆解", "百分号编码", "百分号解码"],
+                        *mode,
+                        palette,
+                        cx,
+                        |view, idx| {
+                            if let Model::Converter(Self::Url { mode, .. }) = &mut view.model {
+                                *mode = idx;
+                            }
+                        },
+                    ),
+                ));
+                if *mode != 0 {
+                    groups.push(option_group(
+                        "范围",
+                        palette,
+                        view.segmented(
+                            "url-target",
+                            &["完整 URL", "组件级"],
+                            usize::from(*component),
+                            palette,
+                            cx,
+                            |view, idx| {
+                                if let Model::Converter(Self::Url { component, .. }) =
+                                    &mut view.model
+                                {
+                                    *component = idx == 1;
+                                }
+                            },
+                        ),
+                    ));
+                    groups.push(option_group(
+                        "空格",
+                        palette,
+                        view.segmented(
+                            "url-space",
+                            &["%20", "+"],
+                            usize::from(*plus),
+                            palette,
+                            cx,
+                            |view, idx| {
+                                if let Model::Converter(Self::Url { plus, .. }) = &mut view.model {
+                                    *plus = idx == 1;
+                                }
+                            },
+                        ),
+                    ));
+                    groups.push(view.toggle_pill(
+                        "url-lines",
+                        "逐行处理",
+                        *lines,
+                        palette,
+                        cx,
+                        |view| {
+                            if let Model::Converter(Self::Url { lines, .. }) = &mut view.model {
+                                *lines = !*lines;
+                            }
+                        },
+                    ));
+                }
             }
             Self::Uuid {
                 kind,
@@ -833,12 +1168,88 @@ impl ConverterOptions {
                 hyphens,
                 format,
             } => {
-                choices!(Uuid, kind, kind, ["v4", "v7", "v1", "NIL", "ULID"]);
-                numeric!(Uuid, count, count, [1, 5, 10, 50, 100], "批量");
-                choices!(Uuid, format, format, ["行", "JSON", "引号"]);
-                toggle!(Uuid, uppercase, uppercase, "大写");
-                toggle!(Uuid, hyphens, hyphens, "连字符");
-                bar = bar.child(view.chip("regenerate", "重新生成", false, palette, cx, |_| {}));
+                groups.push(option_group(
+                    "版本",
+                    palette,
+                    view.segmented(
+                        "uuid-kind",
+                        &["UUID v4", "UUID v7", "UUID v1", "NIL", "ULID"],
+                        *kind,
+                        palette,
+                        cx,
+                        |view, idx| {
+                            if let Model::Converter(Self::Uuid { kind, .. }) = &mut view.model {
+                                *kind = idx;
+                            }
+                        },
+                    ),
+                ));
+                let counts = [1usize, 5, 10, 50, 100];
+                let count_idx = counts.iter().position(|c| c == count).unwrap_or(0);
+                groups.push(option_group(
+                    "数量",
+                    palette,
+                    view.segmented(
+                        "uuid-count",
+                        &["1", "5", "10", "50", "100"],
+                        count_idx,
+                        palette,
+                        cx,
+                        move |view, idx| {
+                            if let Model::Converter(Self::Uuid { count, .. }) = &mut view.model {
+                                *count = counts[idx];
+                            }
+                        },
+                    ),
+                ));
+                groups.push(option_group(
+                    "输出格式",
+                    palette,
+                    view.segmented(
+                        "uuid-fmt",
+                        &["每行一个", "JSON 数组", "带双引号"],
+                        *format,
+                        palette,
+                        cx,
+                        |view, idx| {
+                            if let Model::Converter(Self::Uuid { format, .. }) = &mut view.model {
+                                *format = idx;
+                            }
+                        },
+                    ),
+                ));
+                groups.push(view.toggle_pill(
+                    "uuid-upper",
+                    "大写",
+                    *uppercase,
+                    palette,
+                    cx,
+                    |view| {
+                        if let Model::Converter(Self::Uuid { uppercase, .. }) = &mut view.model {
+                            *uppercase = !*uppercase;
+                        }
+                    },
+                ));
+                groups.push(view.toggle_pill(
+                    "uuid-hyphen",
+                    "连字符",
+                    *hyphens,
+                    palette,
+                    cx,
+                    |view| {
+                        if let Model::Converter(Self::Uuid { hyphens, .. }) = &mut view.model {
+                            *hyphens = !*hyphens;
+                        }
+                    },
+                ));
+                groups.push(view.action_pill(
+                    "regenerate",
+                    Some(IconName::RefreshCw),
+                    "重新生成",
+                    palette,
+                    cx,
+                    |_| {},
+                ));
             }
             Self::Password {
                 token,
@@ -852,36 +1263,182 @@ impl ConverterOptions {
                 symbols,
                 ambiguous,
             } => {
-                toggle!(Password, token, token, "Token（关闭为密码）");
-                numeric!(Password, count, count, [1, 5, 10, 50, 100], "批量");
+                groups.push(option_group(
+                    "类型",
+                    palette,
+                    view.segmented(
+                        "pw-kind",
+                        &["随机密码", "密钥 Token"],
+                        usize::from(*token),
+                        palette,
+                        cx,
+                        |view, idx| {
+                            if let Model::Converter(Self::Password { token, .. }) = &mut view.model
+                            {
+                                *token = idx == 1;
+                            }
+                        },
+                    ),
+                ));
+                let counts = [1usize, 5, 10, 20, 50];
+                let count_idx = counts.iter().position(|c| c == count).unwrap_or(0);
+                groups.push(option_group(
+                    "数量",
+                    palette,
+                    view.segmented(
+                        "pw-count",
+                        &["1", "5", "10", "20", "50"],
+                        count_idx,
+                        palette,
+                        cx,
+                        move |view, idx| {
+                            if let Model::Converter(Self::Password { count, .. }) = &mut view.model
+                            {
+                                *count = counts[idx];
+                            }
+                        },
+                    ),
+                ));
                 if *token {
-                    numeric!(Password, bytes, bytes, [16, 32, 64], "字节");
-                    choices!(Password, encoding, encoding, ["Hex", "B64URL", "Base32"]);
-                } else {
-                    for delta in [-1isize, 1] {
-                        bar = bar.child(view.chip(
-                            &format!("length-{delta}"),
-                            format!("长度 {}", if delta < 0 { "−" } else { "+" }),
-                            false,
+                    let byte_opts = [16usize, 32, 64];
+                    let byte_idx = byte_opts.iter().position(|b| b == bytes).unwrap_or(1);
+                    groups.push(option_group(
+                        "字节长度",
+                        palette,
+                        view.segmented(
+                            "tok-bytes",
+                            &["16 B", "32 B", "64 B"],
+                            byte_idx,
                             palette,
                             cx,
-                            move |view| {
-                                if let Model::Converter(Self::Password { length, .. }) =
+                            move |view, idx| {
+                                if let Model::Converter(Self::Password { bytes, .. }) =
                                     &mut view.model
                                 {
-                                    *length = length.saturating_add_signed(delta).clamp(4, 128);
+                                    *bytes = byte_opts[idx];
                                 }
                             },
-                        ));
-                    }
-                    bar = bar.child(div().text_xs().child(format!("{length} 字符")));
-                    toggle!(Password, lower, lower, "a-z");
-                    toggle!(Password, upper, upper, "A-Z");
-                    toggle!(Password, digits, digits, "0-9");
-                    toggle!(Password, symbols, symbols, "符号");
-                    toggle!(Password, ambiguous, ambiguous, "排除易混字符");
+                        ),
+                    ));
+                    groups.push(option_group(
+                        "编码",
+                        palette,
+                        view.segmented(
+                            "tok-enc",
+                            &["Hex", "Base64URL", "Base32"],
+                            *encoding,
+                            palette,
+                            cx,
+                            |view, idx| {
+                                if let Model::Converter(Self::Password { encoding, .. }) =
+                                    &mut view.model
+                                {
+                                    *encoding = idx;
+                                }
+                            },
+                        ),
+                    ));
+                } else {
+                    let cur_len = *length;
+                    groups.push(option_group(
+                        "长度",
+                        palette,
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_1()
+                            .child(view.action_pill(
+                                "pw-len-minus",
+                                Some(IconName::Minus),
+                                "",
+                                palette,
+                                cx,
+                                |view| {
+                                    if let Model::Converter(Self::Password { length, .. }) =
+                                        &mut view.model
+                                    {
+                                        *length = length.saturating_sub(2).clamp(4, 128);
+                                    }
+                                },
+                            ))
+                            .child(
+                                div()
+                                    .px_2()
+                                    .text_size(px(11.5))
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .text_color(rgb(palette.accent))
+                                    .child(format!("{cur_len} 位")),
+                            )
+                            .child(view.action_pill(
+                                "pw-len-plus",
+                                Some(IconName::Plus),
+                                "",
+                                palette,
+                                cx,
+                                |view| {
+                                    if let Model::Converter(Self::Password { length, .. }) =
+                                        &mut view.model
+                                    {
+                                        *length = length.saturating_add(2).clamp(4, 128);
+                                    }
+                                },
+                            )),
+                    ));
+                    groups.push(
+                        view.toggle_pill("pw-lower", "a-z", *lower, palette, cx, |v| {
+                            if let Model::Converter(Self::Password { lower, .. }) = &mut v.model {
+                                *lower = !*lower;
+                            }
+                        }),
+                    );
+                    groups.push(
+                        view.toggle_pill("pw-upper", "A-Z", *upper, palette, cx, |v| {
+                            if let Model::Converter(Self::Password { upper, .. }) = &mut v.model {
+                                *upper = !*upper;
+                            }
+                        }),
+                    );
+                    groups.push(
+                        view.toggle_pill("pw-digits", "0-9", *digits, palette, cx, |v| {
+                            if let Model::Converter(Self::Password { digits, .. }) = &mut v.model {
+                                *digits = !*digits;
+                            }
+                        }),
+                    );
+                    groups.push(view.toggle_pill(
+                        "pw-sym",
+                        "特殊符号",
+                        *symbols,
+                        palette,
+                        cx,
+                        |v| {
+                            if let Model::Converter(Self::Password { symbols, .. }) = &mut v.model {
+                                *symbols = !*symbols;
+                            }
+                        },
+                    ));
+                    groups.push(view.toggle_pill(
+                        "pw-ambig",
+                        "排除易混字符",
+                        *ambiguous,
+                        palette,
+                        cx,
+                        |v| {
+                            if let Model::Converter(Self::Password { ambiguous, .. }) = &mut v.model
+                            {
+                                *ambiguous = !*ambiguous;
+                            }
+                        },
+                    ));
                 }
-                bar = bar.child(view.chip("regenerate", "重新生成", false, palette, cx, |_| {}));
+                groups.push(view.action_pill(
+                    "regenerate",
+                    Some(IconName::RefreshCw),
+                    "重新生成",
+                    palette,
+                    cx,
+                    |_| {},
+                ));
             }
             Self::Qr {
                 mode,
@@ -889,16 +1446,75 @@ impl ConverterOptions {
                 security,
                 hidden,
             } => {
-                choices!(Qr, mode, mode, ["文本", "URL", "WiFi", "解码"]);
-                choices!(Qr, ec, ec, ["ECC L", "ECC M", "ECC Q", "ECC H"]);
+                groups.push(option_group(
+                    "模式",
+                    palette,
+                    view.segmented(
+                        "qr-mode",
+                        &["文本", "URL", "WiFi 配网", "图片解码"],
+                        *mode,
+                        palette,
+                        cx,
+                        |view, idx| {
+                            if let Model::Converter(Self::Qr { mode, .. }) = &mut view.model {
+                                *mode = idx;
+                            }
+                        },
+                    ),
+                ));
+                if *mode != 3 {
+                    groups.push(option_group(
+                        "容错等级",
+                        palette,
+                        view.segmented(
+                            "qr-ec",
+                            &["L (7%)", "M (15%)", "Q (25%)", "H (30%)"],
+                            *ec,
+                            palette,
+                            cx,
+                            |view, idx| {
+                                if let Model::Converter(Self::Qr { ec, .. }) = &mut view.model {
+                                    *ec = idx;
+                                }
+                            },
+                        ),
+                    ));
+                }
                 if *mode == 2 {
-                    choices!(Qr, security, security, ["WPA", "WEP", "开放"]);
-                    toggle!(Qr, hidden, hidden, "隐藏网络");
+                    groups.push(option_group(
+                        "加密",
+                        palette,
+                        view.segmented(
+                            "qr-wifi-sec",
+                            &["WPA/WPA2", "WEP", "开放网络"],
+                            *security,
+                            palette,
+                            cx,
+                            |view, idx| {
+                                if let Model::Converter(Self::Qr { security, .. }) = &mut view.model
+                                {
+                                    *security = idx;
+                                }
+                            },
+                        ),
+                    ));
+                    groups.push(view.toggle_pill(
+                        "qr-hidden",
+                        "隐藏 SSID",
+                        *hidden,
+                        palette,
+                        cx,
+                        |view| {
+                            if let Model::Converter(Self::Qr { hidden, .. }) = &mut view.model {
+                                *hidden = !*hidden;
+                            }
+                        },
+                    ));
                 }
             }
         }
-        bar.into_any_element()
+
+        let _ = icon_el;
+        options_bar(palette, groups)
     }
 }
-
-use std::sync::Arc;

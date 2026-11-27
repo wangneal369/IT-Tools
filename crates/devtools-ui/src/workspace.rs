@@ -194,6 +194,12 @@ impl Workbench {
             platform,
         } = init;
 
+        let initial_phase = if cx.graphical_environment().is_some() {
+            Phase::WarmStandby
+        } else {
+            Phase::DeepSleep
+        };
+
         let entity = cx.new(|cx| Self {
             store,
             settings,
@@ -215,7 +221,7 @@ impl Workbench {
             settings_open: false,
             autostart_state: None,
             active_window: None,
-            phase: Phase::DeepSleep,
+            phase: initial_phase,
             sleep_timer: None,
             pending_wake: None,
             registry: ToolViewRegistry::with_all_v1_tools(),
@@ -463,9 +469,16 @@ impl Workbench {
         }
     }
 
+    pub(crate) fn current_window_appearance(&self, cx: &mut App) -> Option<WindowAppearance> {
+        self.active_window
+            .and_then(|handle| handle.update(cx, |_, window, _| window.appearance()).ok())
+    }
+
     pub fn set_theme(&mut self, theme: devtools_core::Theme, cx: &mut Context<Self>) {
         self.settings.theme = theme;
         self.persist_settings();
+        let appearance = self.current_window_appearance(cx);
+        crate::theme::sync_gpui_theme(&self.settings, appearance, cx);
         cx.notify();
     }
 
@@ -546,20 +559,23 @@ impl Workbench {
     pub fn set_ligatures(&mut self, enabled: bool, cx: &mut Context<Self>) {
         self.settings.editor.ligatures = enabled;
         self.status_line = if enabled {
-            "已启用等宽连字（M4 编辑器接入后生效）".to_owned()
+            "已启用代码等宽连字".to_owned()
         } else {
-            "已关闭等宽连字".to_owned()
+            "已关闭代码等宽连字".to_owned()
         };
         self.persist_settings();
         cx.notify();
     }
 
-    /// Clamp to the schema-valid range, persist, and report the applied value.
+    /// Clamp to the schema-valid range, persist, sync GPUI theme, and report the applied value.
     pub fn adjust_font_size(&mut self, delta: i32, cx: &mut Context<Self>) {
         let current = i32::from(self.settings.editor.font_size);
         let next = (current + delta).clamp(8, 48) as u16;
         self.settings.editor.font_size = next;
+        self.status_line = format!("代码字号已调整为 {next} px");
         self.persist_settings();
+        let appearance = self.current_window_appearance(cx);
+        crate::theme::sync_gpui_theme(&self.settings, appearance, cx);
         cx.notify();
     }
 
@@ -760,6 +776,14 @@ impl Workbench {
 
     pub fn enter_deep_sleep(&mut self, cx: &mut Context<Self>) {
         self.sleep_timer = None;
+        #[cfg(target_os = "macos")]
+        if self.settings.platform.macos_dock_policy == MacosDockPolicy::Always {
+            // On macOS, `WindowingRequest::Headless` switches `ActivationPolicy`
+            // to `Accessory`, which would hide the Dock icon under `Always`.
+            self.phase = Phase::DeepSleep;
+            cx.notify();
+            return;
+        }
         if cx.graphical_environment().is_none() {
             self.phase = Phase::DeepSleep;
             cx.notify();
@@ -774,12 +798,14 @@ impl Workbench {
             cx.update(|cx| {
                 if let Some(workbench) = weak.upgrade() {
                     workbench.update(cx, |workbench, cx| {
-                        workbench.phase = if result.is_ok() {
-                            Phase::DeepSleep
-                        } else {
-                            Phase::WarmStandby
-                        };
-                        cx.notify();
+                        if workbench.active_window.is_none() && workbench.pending_wake.is_none() {
+                            workbench.phase = if result.is_ok() {
+                                Phase::DeepSleep
+                            } else {
+                                Phase::WarmStandby
+                            };
+                            cx.notify();
+                        }
                     });
                 }
             });
@@ -932,7 +958,7 @@ pub fn window_bounds_from_state(
     cx: &App,
 ) -> WindowBounds {
     let Some(raw_geometry) = state.geometry else {
-        return WindowBounds::centered(None, size(px(1100.0), px(720.0)), cx);
+        return WindowBounds::centered(None, size(px(1180.0), px(760.0)), cx);
     };
     let clamped_min = clamp_geometry(raw_geometry);
 
