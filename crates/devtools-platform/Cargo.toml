@@ -13,6 +13,17 @@ directories = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }
 toml = { workspace = true }
+async-channel = { workspace = true }
+auto-launch = { workspace = true }
+global-hotkey = { workspace = true }
+interprocess = { workspace = true }
+muda = { workspace = true }
+tray-icon = { workspace = true }
+
+# Linux uses tray-icon's pure-Rust `ksni` (StatusNotifierItem over D-Bus)
+# backend: no GTK3 / libappindicator C dependency, no tokio.
+[target.'cfg(target_os = "linux")'.dependencies]
+tray-icon = { workspace = true, features = ["ksni"] }
 
 [dev-dependencies]
 tempfile = "3"

@@ -9,4 +9,8 @@ description = "GPUI workbench shell and tool views (the only crate that depends 
 
 [dependencies]
 devtools-core = { path = "../devtools-core" }
+devtools-platform = { path = "../devtools-platform" }
 gpui-kit = { workspace = true }
+
+[dev-dependencies]
+toml = { workspace = true }

@@ -13,4 +13,5 @@ path = "src/main.rs"
 
 [dependencies]
 devtools-core = { path = "../devtools-core" }
+devtools-platform = { path = "../devtools-platform" }
 devtools-ui = { path = "../devtools-ui" }

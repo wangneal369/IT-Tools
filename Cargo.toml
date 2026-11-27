@@ -23,6 +23,17 @@ directories = "6"
 toml = "1.2"
 gpui-kit = "=0.11.0"
 
+# M2 OS integration layer (all zero-GPUI / zero-tokio).
+async-channel = "2"
+auto-launch = "0.6"
+global-hotkey = "0.10"
+# `default = []` upstream: the async/tokio adapters stay off.
+interprocess = { version = "2", default-features = false }
+# Default features only select the Linux GTK3 backend; Linux uses the pure-Rust
+# `ksni` backend instead (see devtools-platform's target-specific features).
+muda = { version = "0.22", default-features = false }
+tray-icon = { version = "0.27", default-features = false }
+
 [profile.release]
 opt-level = 3
 lto = "thin"

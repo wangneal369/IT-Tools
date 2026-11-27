@@ -22,7 +22,7 @@ pub use payload::{ImagePayload, RawPayload, RelayPayload, ToolLaunchInput};
 pub use session::{ClipboardFingerprint, TabSessionId, TabSessionRecord, TabSessionSummary};
 pub use settings::{
     APP_SETTINGS_SCHEMA_VERSION, AppSettings, AutoJumpMode, CloseBehavior, EditorSettings,
-    HotkeySettings, LayoutSettings, MacosDockPolicy, MinimizeBehavior, NavigationSettings,
+    HotkeySettings, LayoutSettings, Locale, MacosDockPolicy, MinimizeBehavior, NavigationSettings,
     PlatformSettings, ResidencySettings, SmartDetectionSettings, TabBarMode, Theme,
     WINDOW_STATE_SCHEMA_VERSION, WakePlacement, WindowGeometry, WindowState,
 };
