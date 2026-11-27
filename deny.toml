@@ -72,7 +72,7 @@ deny = [
     { name = "single-instance", reason = "single-instance IPC is owned by devtools-platform" },
     { name = "jsonpath-rust", reason = "JSONPath tool uses serde_json_path; jsonpath-rust is banned" },
     { name = "gpui", version = "<=0.2.2", reason = "stale official gpui; use pinned gpui-kit / gpui-pre" },
-    { name = "chrono", wrappers = ["gpui-pre", "gpui-pre-scheduler"], reason = "direct chrono is banned; workspace uses jiff (transitive via gpui-pre 0.3.14 only)" },
+    { name = "chrono", wrappers = ["gpui-pre", "gpui-pre-scheduler", "zxcvbn"], reason = "direct chrono is banned; workspace uses jiff (transitive via gpui-pre 0.3.14 and zxcvbn's wasm32-only target dep)" },
 ]
 
 [sources]

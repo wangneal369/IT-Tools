@@ -20,19 +20,154 @@ all-tools = [
     "security",
 ]
 # 1. 转换
-conversion = []
+conversion = [
+    "dep:serde",
+    "dep:serde_json",
+    "dep:serde-saphyr",
+    "dep:toml",
+    "dep:roxmltree",
+    "dep:quick-xml",
+    "dep:jiff",
+    "dep:num-bigint",
+    "dep:num-traits",
+    "dep:csscolorparser",
+    "dep:csv",
+    "dep:indexmap",
+]
 # 2. 编解码
-encode-decode = []
+encode-decode = [
+    "dep:serde_json",
+    "dep:base64",
+    "dep:data-url",
+    "dep:image",
+    "dep:url",
+    "dep:form_urlencoded",
+    "dep:percent-encoding",
+    "dep:html-escape",
+    "dep:flate2",
+]
 # 3. 格式化
-format = []
+format = [
+    "dep:serde",
+    "dep:serde_json",
+    "dep:indexmap",
+    "dep:lax-sql",
+    "dep:dprint-core",
+    "dep:markup_fmt",
+]
 # 4. 生成器
-generator = []
+generator = [
+    "dep:serde_json",
+    "dep:jiff",
+    "dep:base64",
+    "dep:uuid",
+    "dep:ulid",
+    "dep:rand",
+    "dep:getrandom",
+    "dep:zxcvbn",
+    "dep:qrcode",
+    "dep:rqrr",
+    "dep:image",
+]
 # 5. 文本对比
-text = []
+text = [
+    "dep:serde_json",
+    "dep:similar",
+    "dep:convert_case",
+    "dep:unicode-segmentation",
+    "dep:deunicode",
+    "dep:indexmap",
+]
 # 6. 调试开发
-debug = []
+debug = [
+    "dep:serde_json",
+    "dep:regex",
+    "dep:fancy-regex",
+    "dep:serde_json_path",
+    "dep:croner",
+    "dep:jiff",
+]
 # 7. 安全网络
-security = []
+security = [
+    "dep:serde_json",
+    "dep:jsonwebtoken",
+    "dep:zeroize",
+    "dep:md-5",
+    "dep:sha1",
+    "dep:sha2",
+    "dep:blake3",
+    "dep:hmac",
+    "dep:constant_time_eq",
+    "dep:x509-parser",
+    "dep:p12-keystore",
+    "dep:pem",
+    "dep:ipnet",
+    "dep:indexmap",
+]
 
 [dependencies]
 devtools-core = { path = "../devtools-core" }
+
+# 1. 转换
+serde = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
+serde-saphyr = { version = "2.2", optional = true }
+toml = { workspace = true, optional = true }
+roxmltree = { version = "0.21", optional = true }
+quick-xml = { version = "0.42", optional = true }
+jiff = { version = "1.0", optional = true }
+num-bigint = { version = "0.4", optional = true }
+num-traits = { version = "0.2", optional = true }
+csscolorparser = { version = "0.9", optional = true }
+csv = { version = "1.4", optional = true }
+indexmap = { version = "2", optional = true }
+
+# 2. 编解码
+base64 = { version = "0.23", optional = true }
+data-url = { version = "0.3", optional = true }
+image = { version = "0.25", optional = true, default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp", "ico"] }
+url = { version = "2.5.9", optional = true }
+form_urlencoded = { version = "1", optional = true }
+percent-encoding = { version = "2.3", optional = true }
+html-escape = { version = "0.2", optional = true }
+flate2 = { version = "1.1", optional = true, default-features = false, features = ["rust_backend"] }
+
+# 3. 格式化
+lax-sql = { version = "0.3", optional = true }
+dprint-core = { version = "0.67", optional = true }
+markup_fmt = { version = "0.28", optional = true }
+
+# 4. 生成器
+uuid = { version = "1.29", optional = true, features = ["v1", "v4", "v7"] }
+ulid = { version = "3.0", optional = true }
+rand = { version = "0.10", optional = true }
+getrandom = { version = "0.4", optional = true }
+zxcvbn = { version = "3.1", optional = true }
+qrcode = { version = "0.15", optional = true }
+rqrr = { version = "0.11", optional = true }
+
+# 5. 文本对比
+similar = { version = "3.2", optional = true }
+convert_case = { version = "0.12", optional = true }
+unicode-segmentation = { version = "1.12", optional = true }
+deunicode = { version = "1.6", optional = true }
+
+# 6. 调试开发
+regex = { version = "1.13", optional = true }
+fancy-regex = { version = "0.20", optional = true }
+serde_json_path = { version = "0.7", optional = true }
+croner = { version = "5.0", default-features = false, features = ["std", "jiff"], optional = true }
+
+# 7. 安全网络
+jsonwebtoken = { version = "12", default-features = false, features = ["rust_crypto", "use_pem"], optional = true }
+zeroize = { version = "1", features = ["zeroize_derive"], optional = true }
+md-5 = { version = "0.10", optional = true }
+sha1 = { version = "0.10", optional = true }
+sha2 = { version = "0.10", optional = true }
+blake3 = { version = "1", optional = true }
+hmac = { version = "0.12", optional = true }
+constant_time_eq = { version = "0.4", optional = true }
+x509-parser = { version = "0.18", optional = true }
+p12-keystore = { version = "0.4", optional = true }
+pem = { version = "3", optional = true }
+ipnet = { version = "2.12", optional = true }
