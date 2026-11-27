@@ -1,9 +1,7 @@
 //! Tool view seam (ADR-0004 dual-track UI).
 //!
-//! M3/M4 tool UIs plug into [`ToolViewRegistry`] without touching the shell.
-//! Until then every tool renders [`PlaceholderToolView`], which already carries
-//! the per-instance header (name + instance number, split mode, multi-open,
-//! favorite, relay placeholder, copy-and-dismiss) the real views will reuse.
+//! All 28 V1 tools are explicitly registered by [`ToolViewRegistry::with_all_v1_tools`].
+//! An empty registry retains the shell-only fallback for external factory users.
 
 use std::collections::HashMap;
 
@@ -44,6 +42,17 @@ pub struct ToolViewRegistry {
 impl ToolViewRegistry {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Register every V1 tool with its native, kernel-backed view.
+    pub fn with_all_v1_tools() -> Self {
+        let mut registry = Self::new();
+        crate::views::register_all(&mut registry);
+        registry
+    }
+
+    pub fn is_registered(&self, tool: ToolId) -> bool {
+        self.overrides.contains_key(&tool)
     }
 
     pub fn register(&mut self, tool: ToolId, factory: Box<dyn ToolViewFactory>) {
@@ -374,5 +383,21 @@ fn payload_preview(payload: &devtools_core::RawPayload) -> String {
         devtools_core::RawPayload::Image(image) => {
             format!("图片 {} × {}", image.width, image.height)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ToolViewRegistry;
+    use devtools_core::ToolId;
+
+    #[test]
+    fn all_twenty_eight_tools_have_native_factories() {
+        let registry = ToolViewRegistry::with_all_v1_tools();
+        assert_eq!(registry.overrides.len(), 28);
+        for tool in ToolId::ALL {
+            assert!(registry.is_registered(tool), "{tool:?} uses fallback");
+        }
+        assert!(!ToolViewRegistry::new().is_registered(ToolId::JsonFormatter));
     }
 }

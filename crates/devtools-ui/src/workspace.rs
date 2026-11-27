@@ -60,6 +60,8 @@ pub struct ToolSession {
     pub input: Option<devtools_core::RawPayload>,
     pub output: Option<devtools_core::RawPayload>,
     pub sensitive_output: bool,
+    /// Monotonic marker for explicit injections, including identical content.
+    pub input_revision: u64,
 }
 
 impl ToolSession {
@@ -216,7 +218,7 @@ impl Workbench {
             phase: Phase::DeepSleep,
             sleep_timer: None,
             pending_wake: None,
-            registry: ToolViewRegistry::new(),
+            registry: ToolViewRegistry::with_all_v1_tools(),
             status_line: "就绪".to_owned(),
             smart: crate::smart::SmartState::default(),
             palette_open: false,
@@ -732,6 +734,11 @@ impl Workbench {
     }
 
     pub fn enter_warm_standby(&mut self, cx: &mut Context<Self>) {
+        for tab in &self.tabs {
+            if let TabKind::Tool { view, .. } = &tab.kind {
+                crate::views::release_window(view, cx);
+            }
+        }
         self.phase = Phase::WarmStandby;
         set_macos_policy(cx, self.settings.platform.macos_dock_policy, false);
         self.sleep_timer = Some(cx.spawn(async move |weak, cx| {

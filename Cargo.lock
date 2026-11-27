@@ -1828,6 +1828,7 @@ dependencies = [
  "devtools-detect",
  "devtools-platform",
  "devtools-search",
+ "devtools-tools",
  "gpui-kit",
  "toml 1.2.3+spec-1.1.0",
 ]

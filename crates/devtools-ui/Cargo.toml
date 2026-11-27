@@ -12,6 +12,7 @@ devtools-core = { path = "../devtools-core" }
 devtools-platform = { path = "../devtools-platform" }
 devtools-detect = { path = "../devtools-detect" }
 devtools-search = { path = "../devtools-search" }
+devtools-tools = { path = "../devtools-tools" }
 gpui-kit = { workspace = true }
 
 [dev-dependencies]
