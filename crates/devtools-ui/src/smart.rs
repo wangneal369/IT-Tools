@@ -42,6 +42,7 @@ impl Workbench {
         }
         let session = self.tabs[self.active].session.clone();
         session.update(cx, |session, cx| {
+            session.input_revision = session.input_revision.saturating_add(1);
             session.input = Some(input.payload.clone());
             session.launch_input = Some(input);
             session.output = None;

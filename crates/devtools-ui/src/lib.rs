@@ -14,6 +14,7 @@ pub mod shell;
 pub mod smart;
 pub mod theme;
 pub mod tool_view;
+pub mod views;
 pub mod window;
 pub mod workspace;
 
