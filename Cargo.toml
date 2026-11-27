@@ -1,0 +1,51 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/devtools-core",
+    "crates/devtools-detect",
+    "crates/devtools-tools",
+    "crates/devtools-search",
+    "crates/devtools-platform",
+    "crates/devtools-ui",
+    "crates/devtools-app",
+]
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.98"
+license = "MIT OR Apache-2.0"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+thiserror = "2"
+directories = "6"
+toml = "1.2"
+gpui-kit = "=0.11.0"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+panic = "abort"
+
+# Dev builds keep the heavy UI/layout/image crates optimized so the workbench
+# stays responsive while tool kernels keep fast incremental builds. Every crate
+# listed here is present in Cargo.lock so Cargo emits zero profile warnings.
+[profile.dev.package]
+gpui-kit = { opt-level = 2 }
+gpui-base = { opt-level = 2 }
+gpui-component = { opt-level = 2 }
+gpui-kit-assets = { opt-level = 2 }
+gpui-pre = { opt-level = 2 }
+gpui-pre-platform = { opt-level = 2 }
+gpui-pre-scheduler = { opt-level = 2 }
+taffy = { opt-level = 2 }
+resvg = { opt-level = 2 }
+usvg = { opt-level = 2 }
+tiny-skia = { opt-level = 2 }
+image = { opt-level = 2 }
+ropey = { opt-level = 2 }
+unicode-segmentation = { opt-level = 2 }
+unicode-linebreak = { opt-level = 2 }

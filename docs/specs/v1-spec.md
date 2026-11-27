@@ -22,7 +22,7 @@
 ## 2. 权威架构决策与一手资产索引
 
 ### 2.1 架构决策记录（ADRs）
-- **[ADR-0001](../adr/0001-adopt-gpui-kit-pinned-ui-layer.md)**：`longbridge/gpui-kit = 0.11.0`（默认 `gpui-pre = 0.3.14` 后端）、**MSRV Rust 1.95+**（`edition = "2024"`）、按里程碑锁版升级、精选 8 门 `tree-sitter-*` + 1 MB / 50 KB 大文本降级、原生 UI 字体 + 内嵌 JetBrains Mono（默认关连字）。
+- **[ADR-0001](../adr/0001-adopt-gpui-kit-pinned-ui-layer.md)**：`longbridge/gpui-kit = 0.11.0`（默认 `gpui-pre = 0.3.14` 后端）、**MSRV Rust 1.98+**（`edition = "2024"`）、按里程碑锁版升级、精选 8 门 `tree-sitter-*` + 1 MB / 50 KB 大文本降级、原生 UI 字体 + 内嵌 JetBrains Mono（默认关连字）。
 - **[ADR-0002](../adr/0002-two-stage-headless-background-residency.md)**：`QuitMode::Explicit` + 三态两阶段后台休眠（`活跃态` ↔ 60s `热待机` ↔ `深休眠 / Headless`）、无锁 `async_channel` 事件总线、三端抢焦与平台护栏。
 - **[ADR-0003](../adr/0003-focus-triggered-hybrid-smart-detection.md)**：零后台轮询的「获焦自动检测 + 显式智能粘贴」双通路、混合剪贴板适配层（`Files > Image > Text`）、后台并发分层置信度 DAG 与密码管理器零读取护栏。
 - **[ADR-0004](../adr/0004-pure-rust-tool-framework-and-workspace-architecture.md)**：7-Crate 严格单向 Cargo Workspace、显式集中静态清单注册、零 `tokio` 纯同步/流式 **工具内核**、双轨 UI 扩展（7 个标准模板 + 21 个原生 GPUI 自定义视图）与窗口无关权威 **标签会话**。
@@ -136,7 +136,7 @@ devtools-app (薄入口: 先行 CLI --toggle/--show/--silent 单实例转发秒�
 
 ## 7. 构建、打包分发、CI 门禁与三端真机验收基线
 
-- **工具链与 Profile**：`rust-toolchain.toml` 锁定 **`Rust 1.95`**（`edition = "2024"`），提交 `Cargo.lock`；Release 启用 `opt-level = 3`、`lto = "thin"`、`codegen-units = 1`、`strip = "symbols"`、`panic = "abort"`，单二进制体积红线 **未压缩 `≤ 45 MB` / 压缩分发包 `≤ 22 MB`**；Dev 对重计算与 UI 核心依赖设 `opt-level = 2`；Windows Release 强依赖 Windows 10/11 SDK `fxc.exe`。
+- **工具链与 Profile**：`rust-toolchain.toml` 锁定 **`Rust 1.98`**（`edition = "2024"`），提交 `Cargo.lock`；Release 启用 `opt-level = 3`、`lto = "thin"`、`codegen-units = 1`、`strip = "symbols"`、`panic = "abort"`，单二进制体积红线 **未压缩 `≤ 45 MB` / 压缩分发包 `≤ 22 MB`**；Dev 对重计算与 UI 核心依赖设 `opt-level = 2`；Windows Release 强依赖 Windows 10/11 SDK `fxc.exe`。
 - **GitHub Releases 三端产物**（全附 `SHA256SUMS.txt`）：
   - **Windows (`x86_64`)**：安装器（`.msi` 或 NSIS `.exe`）+ 便携 `.zip`（初期无签名附 SmartScreen 说明，预留证书 Secret 槽位）；
   - **macOS (`aarch64`，按需 `x86_64`/Universal2)**：`DevTools.app` + `.dmg`（`CFBundleIdentifier = io.github.wangneal369.devtools`、`LSUIElement = false`；无证书做 ad-hoc 签名并回退 `LaunchAgent --silent`，预留 Developer ID + `notarytool` 槽位）；
@@ -155,7 +155,7 @@ devtools-app (薄入口: 先行 CLI --toggle/--show/--silent 单实例转发秒�
 
 | 里程碑 | 范围摘要 | 依赖 |
 | :--- | :--- | :--- |
-| **M1 — Workspace 脚手架与合规底座** | 7-crate Cargo Workspace、`rust-toolchain.toml` (`1.95`)、`deny.toml`、GitHub Actions CI、`devtools-core` 契约与 `AppSettings`/`WindowState`、`devtools-platform` 原子配置 I/O 与损坏回退 | 无（首期起点） |
+| **M1 — Workspace 脚手架与合规底座** | 7-crate Cargo Workspace、`rust-toolchain.toml` (`1.98`)、`deny.toml`、GitHub Actions CI、`devtools-core` 契约与 `AppSettings`/`WindowState`、`devtools-platform` 原子配置 I/O 与损坏回退 | 无（首期起点） |
 | **M2 — 桌面常驻壳层与主工作台骨架** | `devtools-platform` 托盘/热键/单实例 IPC/自启、`devtools-ui` A+B 融合工作台与设置页、`devtools-app` 两阶段 `Headless` 生命周期与 CLI 控制参数 | M1 |
 | **M3 — 智能识别、快速命令面板与工具接力** | `devtools-detect` 20 组 DAG 探测器 + 6 条压制 + 隐私护栏、`devtools-search` 模糊检索、顶栏轻提示条 / 命令面板 / 智能粘贴 / 防覆盖多开 / 单跳工具接力 | M2 |
 | **M4a — 7 个标准模板工具** | `StandardTransformTool` 模板渲染器 + 工具 #1、#8、#9、#10、#11、#12、#13 内核与单测 | M3 |

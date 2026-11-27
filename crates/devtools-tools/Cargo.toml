@@ -1,0 +1,38 @@
+[package]
+name = "devtools-tools"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+description = "28 pure computation tool kernels, feature-gated by category (zero GPUI, zero tokio)"
+
+[features]
+default = ["all-tools"]
+# Convenience umbrella enabling every category.
+all-tools = [
+    "conversion",
+    "encode-decode",
+    "format",
+    "generator",
+    "text",
+    "debug",
+    "security",
+]
+# 1. 转换
+conversion = []
+# 2. 编解码
+encode-decode = []
+# 3. 格式化
+format = []
+# 4. 生成器
+generator = []
+# 5. 文本对比
+text = []
+# 6. 调试开发
+debug = []
+# 7. 安全网络
+security = []
+
+[dependencies]
+devtools-core = { path = "../devtools-core" }

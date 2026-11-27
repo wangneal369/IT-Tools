@@ -1,0 +1,16 @@
+[package]
+name = "devtools-app"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+description = "DevTools desktop entry point"
+
+[[bin]]
+name = "devtools"
+path = "src/main.rs"
+
+[dependencies]
+devtools-core = { path = "../devtools-core" }
+devtools-ui = { path = "../devtools-ui" }
