@@ -8,9 +8,10 @@ use devtools_tools::{
 };
 use gpui_kit::*;
 
-use super::Model;
 use super::runtime::{Inputs, ToolResult, ToolView, option_group, options_bar};
+use super::{EditorLanguages, Model};
 use crate::icons::IconName;
+use crate::syntax::SyntaxLang;
 use crate::theme::Palette;
 
 #[derive(Clone)]
@@ -38,6 +39,65 @@ impl StandardOptions {
             toggle: false,
             lines: false,
             level: 6,
+        }
+    }
+
+    pub fn syntax_languages(&self) -> EditorLanguages {
+        let data_format = |index: usize| match index {
+            0 => SyntaxLang::Json,
+            1 => SyntaxLang::Yaml,
+            2 => SyntaxLang::Toml,
+            _ => SyntaxLang::Xml,
+        };
+        match self.tool {
+            ToolId::DataFormatConverter => EditorLanguages {
+                text: Some(data_format(self.from)),
+                second: None,
+                output: Some(data_format(self.to)),
+            },
+            ToolId::JsonFormatter => EditorLanguages {
+                text: Some(SyntaxLang::Json),
+                second: None,
+                output: Some(SyntaxLang::Json),
+            },
+            ToolId::SqlFormatter => EditorLanguages {
+                text: Some(SyntaxLang::Sql),
+                second: None,
+                output: Some(SyntaxLang::Sql),
+            },
+            ToolId::XmlHtmlFormatter => {
+                let lang = match self.style {
+                    1 => SyntaxLang::Xml,
+                    2 => SyntaxLang::Html,
+                    _ => SyntaxLang::XmlHtml,
+                };
+                EditorLanguages {
+                    text: Some(lang),
+                    second: None,
+                    output: Some(lang),
+                }
+            }
+            ToolId::HtmlEntityUnicode => {
+                let lang = match self.style {
+                    0 => Some(SyntaxLang::Html),
+                    2 => Some(SyntaxLang::Css),
+                    _ => None,
+                };
+                if self.reverse {
+                    EditorLanguages {
+                        text: None,
+                        second: None,
+                        output: lang,
+                    }
+                } else {
+                    EditorLanguages {
+                        text: lang,
+                        second: None,
+                        output: None,
+                    }
+                }
+            }
+            _ => EditorLanguages::default(),
         }
     }
 

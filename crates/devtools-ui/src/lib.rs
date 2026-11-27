@@ -10,6 +10,7 @@ pub mod samples;
 pub mod settings;
 pub mod shell;
 pub mod smart;
+pub mod syntax;
 pub mod theme;
 pub mod tool_view;
 pub mod views;

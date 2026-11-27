@@ -11,6 +11,7 @@ use gpui_kit::*;
 use super::Model;
 use crate::icons::{IconName, icon_el, tool_icon};
 use crate::labels::{tool_hint, tool_name};
+use crate::syntax::{SyntaxSpec, resolve_syntax};
 use crate::theme::Palette;
 use crate::tool_view::{SplitMode, ToolViewContext};
 use crate::workspace::Workbench;
@@ -270,12 +271,25 @@ struct Editors {
     text: Entity<EditorState>,
     second: Entity<EditorState>,
     output: Entity<EditorState>,
+    text_lang: &'static str,
+    second_lang: &'static str,
+    output_lang: &'static str,
     query: Entity<InputState>,
     replacement: Entity<InputState>,
     secret: Entity<InputState>,
     expected: Entity<InputState>,
     color: Entity<ColorPickerState>,
     _subscriptions: Vec<Subscription>,
+}
+
+fn is_pure_code_result(result: &ToolResult) -> bool {
+    result.rows.is_empty()
+        && result.table.is_none()
+        && result.diff_lines.is_empty()
+        && result.swatch.is_none()
+        && result.strength.is_none()
+        && result.image.is_none()
+        && result.highlights.is_empty()
 }
 
 pub(super) struct ToolView {
@@ -604,11 +618,36 @@ impl ToolView {
         self.editors = None;
     }
 
+    fn syntax_specs(&self) -> (SyntaxSpec, SyntaxSpec, SyntaxSpec) {
+        let langs = self.model.syntax_languages();
+        let output = self.runtime.output.as_deref().unwrap_or_default();
+        (
+            resolve_syntax(langs.text, &self.inputs.text),
+            resolve_syntax(langs.second, &self.inputs.second),
+            resolve_syntax(langs.output, output),
+        )
+    }
+
     fn ensure_editors(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let (text_spec, second_spec, output_spec) = self.syntax_specs();
         if self.editors.is_none() {
-            let text = cx.new(|cx| EditorState::new(window, cx));
-            let second = cx.new(|cx| EditorState::new(window, cx));
-            let output = cx.new(|cx| EditorState::new(window, cx));
+            let is_sql = self.context.tool_id == ToolId::SqlFormatter;
+            let text = cx.new(|cx| {
+                let mut state = EditorState::new(window, cx).language(text_spec.highlighter);
+                if is_sql {
+                    state.set_highlighter_factory(crate::syntax::sql_highlighter_factory(), cx);
+                }
+                state
+            });
+            let second =
+                cx.new(|cx| EditorState::new(window, cx).language(second_spec.highlighter));
+            let output = cx.new(|cx| {
+                let mut state = EditorState::new(window, cx).language(output_spec.highlighter);
+                if is_sql {
+                    state.set_highlighter_factory(crate::syntax::sql_highlighter_factory(), cx);
+                }
+                state
+            });
             let query = cx.new(|cx| InputState::new(window, cx));
             let replacement = cx.new(|cx| InputState::new(window, cx));
             let secret = cx.new(|cx| InputState::new(window, cx).masked(true));
@@ -672,6 +711,9 @@ impl ToolView {
                 text,
                 second,
                 output,
+                text_lang: text_spec.highlighter,
+                second_lang: second_spec.highlighter,
+                output_lang: output_spec.highlighter,
                 query,
                 replacement,
                 secret,
@@ -680,7 +722,25 @@ impl ToolView {
                 _subscriptions: subscriptions,
             });
         }
-        let editors = self.editors.as_ref().expect("initialized editors");
+        let editors = self.editors.as_mut().expect("initialized editors");
+        if editors.text_lang != text_spec.highlighter {
+            editors.text_lang = text_spec.highlighter;
+            editors.text.update(cx, |state, cx| {
+                state.set_highlighter(text_spec.highlighter, cx);
+            });
+        }
+        if editors.second_lang != second_spec.highlighter {
+            editors.second_lang = second_spec.highlighter;
+            editors.second.update(cx, |state, cx| {
+                state.set_highlighter(second_spec.highlighter, cx);
+            });
+        }
+        if editors.output_lang != output_spec.highlighter {
+            editors.output_lang = output_spec.highlighter;
+            editors.output.update(cx, |state, cx| {
+                state.set_highlighter(output_spec.highlighter, cx);
+            });
+        }
         let output = self.runtime.output.as_deref().unwrap_or_default();
         if editors.output.read(cx).value().as_ref() != output {
             editors.output.update(cx, |state, cx| {
@@ -1332,6 +1392,8 @@ impl ToolView {
 
     fn render_input_card(&self, palette: Palette, cx: &Context<Self>) -> AnyElement {
         let has_any_input = self.inputs.bytes() > 0 || self.inputs.has_non_text_payload();
+        let (text_spec, second_spec, _) = self.syntax_specs();
+        let input_degraded = text_spec.degraded || second_spec.degraded;
         let stats_label = if self.inputs.text.is_empty() && self.inputs.second.is_empty() {
             "空".to_owned()
         } else {
@@ -1363,6 +1425,32 @@ impl ToolView {
                             .text_color(rgb(palette.text))
                             .child(input_pane_title(self.context.tool_id)),
                     )
+                    .when_some(text_spec.badge, |el, badge| {
+                        el.child(
+                            div()
+                                .px_1p5()
+                                .py_0p5()
+                                .rounded_sm()
+                                .bg(rgb(palette.accent_soft))
+                                .text_size(px(10.0))
+                                .font_weight(FontWeight::MEDIUM)
+                                .text_color(rgb(palette.accent))
+                                .child(badge),
+                        )
+                    })
+                    .when(input_degraded, |el| {
+                        el.child(
+                            div()
+                                .px_1p5()
+                                .py_0p5()
+                                .rounded_sm()
+                                .bg(rgb(palette.warning_soft))
+                                .text_size(px(10.0))
+                                .font_weight(FontWeight::MEDIUM)
+                                .text_color(rgb(palette.warning))
+                                .child("大文本 · 纯文本模式"),
+                        )
+                    })
                     .child(
                         div()
                             .text_size(px(11.0))
@@ -1498,6 +1586,8 @@ impl ToolView {
         let sensitive = self.context.tool_id.default_capabilities().sensitive_output;
         let is_stale = matches!(self.runtime.state, ExecutionState::Stale(_));
         let can_copy = self.runtime.can_copy();
+        let (_, _, output_spec) = self.syntax_specs();
+        let show_output_syntax = self.result.as_ref().is_none_or(is_pure_code_result);
 
         let output_stats = self.result.as_ref().map(|r| {
             if !r.rows.is_empty() {
@@ -1539,6 +1629,33 @@ impl ToolView {
                     .text_color(rgb(palette.muted))
                     .child("只读"),
             );
+
+        if show_output_syntax && let Some(badge) = output_spec.badge {
+            left_badges = left_badges.child(
+                div()
+                    .px_1p5()
+                    .py_0p5()
+                    .rounded_sm()
+                    .bg(rgb(palette.accent_soft))
+                    .text_size(px(10.0))
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(rgb(palette.accent))
+                    .child(badge),
+            );
+            if output_spec.degraded {
+                left_badges = left_badges.child(
+                    div()
+                        .px_1p5()
+                        .py_0p5()
+                        .rounded_sm()
+                        .bg(rgb(palette.warning_soft))
+                        .text_size(px(10.0))
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(rgb(palette.warning))
+                        .child("大文本 · 纯文本模式"),
+                );
+            }
+        }
 
         if sensitive {
             left_badges = left_badges.child(
@@ -1825,15 +1942,7 @@ impl ToolView {
                 .into_any_element();
         };
 
-        let is_pure_code_output = result.rows.is_empty()
-            && result.table.is_none()
-            && result.diff_lines.is_empty()
-            && result.swatch.is_none()
-            && result.strength.is_none()
-            && result.image.is_none()
-            && result.highlights.is_empty();
-
-        if is_pure_code_output {
+        if is_pure_code_result(result) {
             return div()
                 .flex_1()
                 .min_h_0()

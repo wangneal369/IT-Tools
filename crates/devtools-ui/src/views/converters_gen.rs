@@ -10,9 +10,10 @@ use devtools_tools::{
 };
 use gpui_kit::*;
 
-use super::Model;
 use super::runtime::{Inputs, Slot, ToolResult, ToolView, WcagSummary, option_group, options_bar};
+use super::{EditorLanguages, Model};
 use crate::icons::{IconName, icon_el};
+use crate::syntax::SyntaxLang;
 use crate::theme::Palette;
 
 #[derive(Clone)]
@@ -186,6 +187,27 @@ impl ConverterOptions {
             },
             _ => return None,
         })
+    }
+
+    pub fn syntax_languages(&self) -> EditorLanguages {
+        match self {
+            Self::Color => EditorLanguages {
+                text: Some(SyntaxLang::Css),
+                second: None,
+                output: None,
+            },
+            Self::Table { format, .. } => EditorLanguages {
+                text: Some(SyntaxLang::Json),
+                second: None,
+                output: (*format == 3).then_some(SyntaxLang::Markdown),
+            },
+            Self::Uuid { format, .. } => EditorLanguages {
+                text: None,
+                second: None,
+                output: (*format == 1).then_some(SyntaxLang::Json),
+            },
+            _ => EditorLanguages::default(),
+        }
     }
 
     pub fn inject(&mut self, text: &str, _: Option<&ToolLaunchInput>) {

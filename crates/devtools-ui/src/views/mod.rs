@@ -10,6 +10,7 @@ pub use runtime::{Debounce, ExecutionState, ToolRuntime, debounce};
 use devtools_core::{CancelFlag, ToolError, ToolId, UiTrack};
 use gpui_kit::*;
 
+use crate::syntax::SyntaxLang;
 use crate::tool_view::{ToolViewContext, ToolViewFactory, ToolViewRegistry};
 use crate::workspace::Workbench;
 
@@ -17,6 +18,13 @@ use converters_gen::ConverterOptions;
 use runtime::{Inputs, ToolResult, ToolView};
 use standard::StandardOptions;
 use text_debug_sec::DebugOptions;
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub(super) struct EditorLanguages {
+    pub text: Option<SyntaxLang>,
+    pub second: Option<SyntaxLang>,
+    pub output: Option<SyntaxLang>,
+}
 
 #[derive(Clone)]
 enum Model {
@@ -33,6 +41,14 @@ impl Model {
             Self::Converter(options)
         } else {
             Self::Debug(DebugOptions::new(tool))
+        }
+    }
+
+    fn syntax_languages(&self) -> EditorLanguages {
+        match self {
+            Self::Standard(options) => options.syntax_languages(),
+            Self::Converter(options) => options.syntax_languages(),
+            Self::Debug(options) => options.syntax_languages(),
         }
     }
 
@@ -318,5 +334,63 @@ c",
                 "sample for {tool:?} produced empty output"
             );
         }
+    }
+
+    #[test]
+    fn structured_tools_resolve_expected_syntax_languages() {
+        use super::converters_gen::ConverterOptions;
+        use super::text_debug_sec::DebugOptions;
+        use crate::syntax::SyntaxLang;
+
+        let json_fmt = Model::new(ToolId::JsonFormatter).syntax_languages();
+        assert_eq!(json_fmt.text, Some(SyntaxLang::Json));
+        assert_eq!(json_fmt.output, Some(SyntaxLang::Json));
+
+        let data_fmt = Model::new(ToolId::DataFormatConverter).syntax_languages();
+        assert_eq!(data_fmt.text, Some(SyntaxLang::Json));
+        assert_eq!(data_fmt.output, Some(SyntaxLang::Yaml));
+
+        let sql_fmt = Model::new(ToolId::SqlFormatter).syntax_languages();
+        assert_eq!(sql_fmt.text, Some(SyntaxLang::Sql));
+        assert_eq!(sql_fmt.output, Some(SyntaxLang::Sql));
+
+        let xml_fmt = Model::new(ToolId::XmlHtmlFormatter).syntax_languages();
+        assert_eq!(xml_fmt.text, Some(SyntaxLang::XmlHtml));
+        assert_eq!(xml_fmt.output, Some(SyntaxLang::XmlHtml));
+
+        let json_diff = Model::new(ToolId::JsonDiff).syntax_languages();
+        assert_eq!(json_diff.text, Some(SyntaxLang::Json));
+        assert_eq!(json_diff.second, Some(SyntaxLang::Json));
+
+        let text_diff = Model::new(ToolId::TextDiff).syntax_languages();
+        assert_eq!(text_diff.output, Some(SyntaxLang::Diff));
+
+        let md_table = Model::Converter(ConverterOptions::Table {
+            format: 3,
+            flatten: true,
+            bom: false,
+        })
+        .syntax_languages();
+        assert_eq!(md_table.text, Some(SyntaxLang::Json));
+        assert_eq!(md_table.output, Some(SyntaxLang::Markdown));
+
+        let jwt_decode = Model::new(ToolId::JwtTool).syntax_languages();
+        assert_eq!(jwt_decode.text, None);
+        let jwt_sign = Model::Debug(DebugOptions::Jwt {
+            mode: 2,
+            algorithm: 0,
+        })
+        .syntax_languages();
+        assert_eq!(jwt_sign.text, Some(SyntaxLang::Json));
+
+        let uuid_json = Model::Converter(ConverterOptions::Uuid {
+            kind: 0,
+            count: 1,
+            uppercase: false,
+            hyphens: true,
+            format: 1,
+        })
+        .syntax_languages();
+        assert_eq!(uuid_json.output, Some(SyntaxLang::Json));
     }
 }

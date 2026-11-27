@@ -14,6 +14,7 @@ devtools-detect = { path = "../devtools-detect" }
 devtools-search = { path = "../devtools-search" }
 devtools-tools = { path = "../devtools-tools" }
 gpui-kit = { workspace = true }
+serde_json = { workspace = true }
 
 [dev-dependencies]
 toml = { workspace = true }

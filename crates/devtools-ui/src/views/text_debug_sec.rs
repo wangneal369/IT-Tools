@@ -5,10 +5,11 @@ use devtools_tools::{debug, security, text};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 
-use super::Model;
 use super::converters_gen::{read_bytes, read_file};
 use super::runtime::{Inputs, Slot, ToolResult, ToolView, option_group, options_bar};
+use super::{EditorLanguages, Model};
 use crate::icons::{IconName, icon_el};
+use crate::syntax::SyntaxLang;
 use crate::theme::Palette;
 
 #[derive(Clone)]
@@ -110,6 +111,32 @@ impl DebugOptions {
             ToolId::X509Parser => Self::X509 { file: false },
             ToolId::Ipv4CidrCalculator => Self::Cidr,
             _ => unreachable!("all other tools have standard or conversion views"),
+        }
+    }
+
+    pub fn syntax_languages(&self) -> EditorLanguages {
+        match self {
+            Self::Diff { mode, .. } => EditorLanguages {
+                text: None,
+                second: None,
+                output: (*mode == 0).then_some(SyntaxLang::Diff),
+            },
+            Self::JsonDiff { .. } => EditorLanguages {
+                text: Some(SyntaxLang::Json),
+                second: Some(SyntaxLang::Json),
+                output: None,
+            },
+            Self::JsonPath { .. } => EditorLanguages {
+                text: Some(SyntaxLang::Json),
+                second: None,
+                output: None,
+            },
+            Self::Jwt { mode, .. } => EditorLanguages {
+                text: (*mode == 2).then_some(SyntaxLang::Json),
+                second: None,
+                output: None,
+            },
+            _ => EditorLanguages::default(),
         }
     }
 
