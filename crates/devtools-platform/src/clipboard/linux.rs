@@ -101,7 +101,7 @@ pub(super) fn read() -> Result<ClipboardReadOutcome, ClipboardError> {
         .as_chunks::<4>()
         .0
         .iter()
-        .map(|b| u32::from_ne_bytes(b.try_into().unwrap()))
+        .map(|b| u32::from_ne_bytes(*b))
         .collect();
     let hint = atom(b"x-kde-passwordManagerHint")?;
     if targets.contains(&hint) && request(hint, 64)?.as_slice() == b"secret" {
