@@ -37,6 +37,29 @@ pub enum Theme {
     Light,
 }
 
+/// 界面语言。
+///
+/// V1 界面以简体中文为主，`en-US` 仅作为设置项占位记录，不改变现有界面文本
+/// （多语言 i18n 明确不在 V1 范围内）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+pub enum Locale {
+    #[default]
+    #[serde(rename = "zh-CN")]
+    ZhCn,
+    #[serde(rename = "en-US")]
+    EnUs,
+}
+
+impl Locale {
+    /// Human-readable label used by the settings panel.
+    pub const fn label(self) -> &'static str {
+        match self {
+            Locale::ZhCn => "简体中文",
+            Locale::EnUs => "English (V2)",
+        }
+    }
+}
+
 /// 代码编辑器外观（对齐 Issue #5 承诺的三项可配置字体偏好）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -259,6 +282,10 @@ impl Default for PlatformSettings {
 pub struct AppSettings {
     pub schema_version: u32,
     pub theme: Theme,
+    /// 界面语言偏好。`serde(default)` keeps pre-M2 `config.toml` files loadable
+    /// without weakening the surrounding `deny_unknown_fields` contract.
+    #[serde(default)]
+    pub locale: Locale,
     pub editor: EditorSettings,
     pub layout: LayoutSettings,
     pub navigation: NavigationSettings,
@@ -273,6 +300,7 @@ impl Default for AppSettings {
         Self {
             schema_version: APP_SETTINGS_SCHEMA_VERSION,
             theme: Theme::System,
+            locale: Locale::default(),
             editor: EditorSettings::default(),
             layout: LayoutSettings::default(),
             navigation: NavigationSettings::default(),
@@ -412,5 +440,11 @@ mod tests {
 
         state.tab_skeleton = vec![ToolId::JsonFormatter];
         assert!(state.validate().is_ok());
+    }
+
+    #[test]
+    fn locale_defaults_to_simplified_chinese() {
+        assert_eq!(AppSettings::default().locale, Locale::ZhCn);
+        assert_eq!(Locale::default().label(), "简体中文");
     }
 }
