@@ -1,0 +1,11 @@
+[package]
+name = "devtools-detect"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+description = "Hierarchical smart-detection DAG engine (zero GPUI)"
+
+[dependencies]
+devtools-core = { path = "../devtools-core" }

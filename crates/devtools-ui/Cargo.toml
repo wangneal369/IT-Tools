@@ -1,0 +1,12 @@
+[package]
+name = "devtools-ui"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+description = "GPUI workbench shell and tool views (the only crate that depends on gpui-kit)"
+
+[dependencies]
+devtools-core = { path = "../devtools-core" }
+gpui-kit = { workspace = true }
