@@ -1,9 +1,21 @@
-//! 智能识别分层 DAG 引擎（spec §4 / ADR-0003）。
+//! 纯 Rust 智能识别 DAG：Files > Image > Text，载荷与指纹仅驻内存。
 //!
-//! M1 脚手架：本 crate 为零 GPUI 依赖的占位，20 组探测器、6 条互斥压制与
-//! 密码管理器零读取隐私护栏在 M3 落地。与 `devtools-tools` 同级互不依赖。
-//!
-//! 剪贴板按 `Files > Image > Text` 读取，产出 [`MatchedDataChain`] 与
-//! [`ParsedHint`]，4 级置信度 [`Confidence`]。
+//! 调用方在后台执行本同步内核，并在读取正文前检查平台隐私标记。
+//! 引擎不读取系统剪贴板、不创建线程、不记录历史，也不依赖工具内核。
+
+mod engine;
+mod fingerprint;
+mod privacy;
+mod text;
 
 pub use devtools_core;
+pub use engine::{
+    DETECTORS, DetectionEngine, DetectionMode, DetectionResult, DetectionStatus, DetectorSpec,
+    FULL_TEXT_LIMIT, HARD_TIMEOUT, IMAGE_LIMIT, MAGIC_PREFIX_LIMIT, Recommendation, SOFT_TARGET,
+    STREAMING_FILE_LIMIT, TEXT_LIMIT,
+};
+pub use fingerprint::{ClipboardDeduplicator, DedupDecision};
+pub use privacy::{PrivacyAssessment, assess_privacy, redacted_preview};
+
+#[cfg(test)]
+mod tests;

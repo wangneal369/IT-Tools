@@ -6,6 +6,7 @@
 //! the window-independent [`Workbench`] entity.
 
 use devtools_core::{Category, TabBarMode, ToolId};
+use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
@@ -18,6 +19,12 @@ use crate::workspace::{HomeView, Phase, TabKind, Workbench, geometry_from_bounds
 pub struct WorkbenchView {
     workbench: Entity<Workbench>,
     _bounds_subscription: Subscription,
+    _activation_subscription: Subscription,
+    _state_subscription: Subscription,
+    _input_subscription: Subscription,
+    palette_input: Entity<InputState>,
+    palette_epoch: u64,
+    previous_focus: Option<FocusHandle>,
 }
 
 impl WorkbenchView {
@@ -29,9 +36,39 @@ impl WorkbenchView {
             observed.update(cx, |state, _| state.note_geometry(geometry, maximized));
         });
 
+        if window.is_window_active() {
+            let initial = workbench.clone();
+            cx.defer(move |cx| initial.update(cx, |state, cx| state.smart_paste(false, cx)));
+        }
+        let focus_state = workbench.clone();
+        let activation = cx.observe_window_activation(window, move |_, window, cx| {
+            if window.is_window_active() {
+                focus_state.update(cx, |state, cx| state.smart_paste(false, cx));
+            }
+        });
+        let state_subscription = cx.observe(&workbench, |_, _, cx| cx.notify());
+        let palette_input = cx
+            .new(|cx| InputState::new(window, cx).placeholder("搜索工具 / 中文 / English / 拼音"));
+        let state_for_input = workbench.clone();
+        let input_subscription = cx.subscribe(&palette_input, move |_, input, event, cx| {
+            if matches!(event, InputEvent::Change) {
+                let value = input.read(cx).value().to_string();
+                state_for_input.update(cx, |state, cx| {
+                    state.palette_query = value;
+                    state.palette_selected = 0;
+                    cx.notify();
+                });
+            }
+        });
         Self {
             workbench,
             _bounds_subscription: bounds_subscription,
+            _activation_subscription: activation,
+            _state_subscription: state_subscription,
+            _input_subscription: input_subscription,
+            palette_input,
+            palette_epoch: 0,
+            previous_focus: None,
         }
     }
 }
@@ -39,6 +76,20 @@ impl WorkbenchView {
 impl Render for WorkbenchView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let workbench = self.workbench.clone();
+        let (open, epoch) = {
+            let state = workbench.read(cx);
+            (state.palette_open, state.palette_epoch)
+        };
+        if open && epoch != self.palette_epoch {
+            self.previous_focus = window.focused(cx);
+            self.palette_epoch = epoch;
+            self.palette_input.update(cx, |input, cx| {
+                input.set_value("", window, cx);
+                input.focus(window, cx);
+            });
+        } else if !open && let Some(focus) = self.previous_focus.take() {
+            window.focus(&focus, cx);
+        }
 
         let (
             palette,
@@ -80,6 +131,7 @@ impl Render for WorkbenchView {
                 .flex_col()
                 .overflow_hidden()
                 .child(tab_bar)
+                .children(render_detection_banner(&workbench, palette, cx))
                 .child(content),
         );
 
@@ -104,7 +156,7 @@ impl Render for WorkbenchView {
             .child(format!("热键：{hotkey_label}"));
 
         let flyout = if collapsed {
-            flyout_category.map(|category| render_flyout(&workbench, palette, category))
+            flyout_category.map(|category| render_flyout(&workbench, palette, category, cx))
         } else {
             None
         };
@@ -120,6 +172,12 @@ impl Render for WorkbenchView {
             .child(main)
             .child(status)
             .children(flyout)
+            .children(render_relay(&workbench, palette, cx))
+            .children(if open {
+                Some(render_palette(&workbench, &self.palette_input, palette, cx))
+            } else {
+                None
+            })
     }
 }
 
@@ -185,7 +243,8 @@ fn render_rail(
 
     for (index, category) in Category::ALL.into_iter().enumerate() {
         let wb = workbench.clone();
-        let active = matches!(home_view, HomeView::Category(current) if current == category);
+        let active = matches!(home_view, HomeView::Category(current) if current == category)
+            || tools_in(category).any(|tool| workbench.read(cx).recommendation_for(tool));
         rail = rail.child(nav_item(
             palette,
             &format!("rail-category-{index}"),
@@ -391,6 +450,23 @@ fn render_tab_bar(
         .child(tabs_container)
         .child(
             div()
+                .id("command-palette-open")
+                .px_3()
+                .py_1()
+                .rounded_md()
+                .cursor_pointer()
+                .bg(rgb(palette.panel))
+                .text_xs()
+                .child("搜索工具  Ctrl/Cmd+K")
+                .on_click({
+                    let wb = workbench.clone();
+                    move |_, _, cx| {
+                        wb.update(cx, |s, cx| s.open_palette(cx));
+                    }
+                }),
+        )
+        .child(
+            div()
                 .id("tab-mode-toggle")
                 .px_2()
                 .py_1()
@@ -511,10 +587,10 @@ fn render_home(workbench: &Entity<Workbench>, palette: Palette, cx: &App) -> Any
     }
 
     if let HomeView::Category(category) = home_view {
-        page = page.child(tool_grid(workbench, palette, category));
+        page = page.child(tool_grid(workbench, palette, category, cx));
     } else {
         for category in Category::ALL {
-            page = page.child(tool_grid(workbench, palette, category));
+            page = page.child(tool_grid(workbench, palette, category, cx));
         }
     }
 
@@ -563,13 +639,24 @@ fn chip_section(
         .into_any_element()
 }
 
-fn tool_grid(workbench: &Entity<Workbench>, palette: Palette, category: Category) -> AnyElement {
+fn tool_grid(
+    workbench: &Entity<Workbench>,
+    palette: Palette,
+    category: Category,
+    cx: &App,
+) -> AnyElement {
     let mut list = div().flex().flex_col().gap_1();
     for tool in tools_in(category) {
+        let matched = workbench.read(cx).recommendation_for(tool);
         let wb = workbench.clone();
         list = list.child(
             div()
                 .id(format!("tool-{}", tool.as_str()))
+                .text_color(rgb(if matched {
+                    palette.accent
+                } else {
+                    palette.text
+                }))
                 .flex()
                 .items_center()
                 .justify_between()
@@ -640,13 +727,20 @@ fn render_flyout(
     workbench: &Entity<Workbench>,
     palette: Palette,
     category: Category,
+    cx: &App,
 ) -> AnyElement {
     let mut list = div().flex().flex_col().gap_1();
     for tool in tools_in(category) {
+        let matched = workbench.read(cx).recommendation_for(tool);
         let wb = workbench.clone();
         list = list.child(
             div()
                 .id(format!("flyout-{}", tool.as_str()))
+                .text_color(rgb(if matched {
+                    palette.accent
+                } else {
+                    palette.text
+                }))
                 .px_2()
                 .py_1()
                 .rounded_sm()
@@ -690,4 +784,231 @@ fn render_flyout(
 /// Expose the phase label for tests/status usage elsewhere.
 pub fn phase_label(phase: Phase) -> &'static str {
     phase.label()
+}
+
+fn render_detection_banner(
+    workbench: &Entity<Workbench>,
+    palette: Palette,
+    cx: &App,
+) -> Option<AnyElement> {
+    let state = workbench.read(cx);
+    let recommendations: Vec<_> = state.smart.result.banner().cloned().collect();
+    if recommendations.is_empty() {
+        return None;
+    }
+    let mut banner = div()
+        .flex()
+        .items_center()
+        .gap_2()
+        .px_3()
+        .py_2()
+        .bg(rgb(palette.accent_soft))
+        .text_xs()
+        .child(
+            div()
+                .flex_1()
+                .truncate()
+                .child(format!("已识别 · {}", state.smart.result.preview)),
+        );
+    for recommendation in recommendations {
+        let tool = recommendation.tool_id;
+        let wb = workbench.clone();
+        banner = banner.child(
+            div()
+                .id(format!("detect-{}", tool.as_str()))
+                .px_2()
+                .py_1()
+                .rounded_sm()
+                .cursor_pointer()
+                .bg(rgb(palette.panel))
+                .text_color(rgb(palette.accent))
+                .child(tool_name(tool))
+                .on_click(move |_, _, cx| {
+                    wb.update(cx, |s, cx| s.launch_recommendation(tool, cx));
+                }),
+        );
+    }
+    let wb = workbench.clone();
+    Some(
+        banner
+            .child(
+                div()
+                    .id("detect-dismiss")
+                    .px_2()
+                    .cursor_pointer()
+                    .child("×")
+                    .on_click(move |_, _, cx| {
+                        wb.update(cx, |s, cx| s.clear_detection(cx));
+                    }),
+            )
+            .into_any_element(),
+    )
+}
+
+fn render_palette(
+    workbench: &Entity<Workbench>,
+    input: &Entity<InputState>,
+    palette: Palette,
+    cx: &App,
+) -> AnyElement {
+    let state = workbench.read(cx);
+    let results = state.palette_results();
+    let mut rows = div()
+        .flex()
+        .flex_col()
+        .gap_1()
+        .max_h(px(450.0))
+        .overflow_y_scrollbar();
+    let mut previous = None;
+    for (index, result) in results.iter().enumerate() {
+        if previous != Some(result.group) {
+            previous = Some(result.group);
+            rows = rows.child(
+                div()
+                    .px_2()
+                    .py_1()
+                    .text_xs()
+                    .text_color(rgb(palette.muted))
+                    .child(match result.group {
+                        devtools_search::SearchGroup::Detection => "剪贴板推荐",
+                        devtools_search::SearchGroup::Favorite => "收藏",
+                        devtools_search::SearchGroup::Catalog => "全部工具",
+                    }),
+            );
+        }
+        let wb = workbench.clone();
+        rows = rows.child(
+            div()
+                .id(format!("palette-{index}"))
+                .px_3()
+                .py_2()
+                .rounded_md()
+                .cursor_pointer()
+                .bg(rgb(if index == state.palette_selected {
+                    palette.accent_soft
+                } else {
+                    palette.panel
+                }))
+                .text_sm()
+                .child(result.descriptor.name)
+                .on_click(move |_, _, cx| {
+                    wb.update(cx, |s, cx| s.activate_palette(index, cx));
+                }),
+        );
+    }
+    if results.is_empty() {
+        rows = rows.child(div().p_3().text_sm().child("没有匹配的工具"));
+    }
+    let wb = workbench.clone();
+    div()
+        .absolute()
+        .inset_0()
+        .flex()
+        .flex_col()
+        .items_center()
+        .pt(px(65.0))
+        .bg(rgba(0x00000066))
+        .child(
+            div()
+                .w(px(560.0))
+                .max_w_full()
+                .p_3()
+                .rounded_lg()
+                .bg(rgb(palette.panel))
+                .border_1()
+                .border_color(rgb(palette.border))
+                .child(
+                    div()
+                        .flex()
+                        .justify_between()
+                        .pb_2()
+                        .text_sm()
+                        .child("快速命令面板")
+                        .child(
+                            div()
+                                .id("palette-close")
+                                .cursor_pointer()
+                                .child("Esc ×")
+                                .on_click(move |_, _, cx| {
+                                    wb.update(cx, |s, cx| s.close_palette(cx));
+                                }),
+                        ),
+                )
+                .child(Input::new(input))
+                .child(rows)
+                .child(
+                    div()
+                        .pt_2()
+                        .text_xs()
+                        .text_color(rgb(palette.muted))
+                        .child("↑ ↓ 选择 · Enter 打开 · Esc 返回"),
+                ),
+        )
+        .into_any_element()
+}
+
+fn render_relay(workbench: &Entity<Workbench>, palette: Palette, cx: &App) -> Option<AnyElement> {
+    let state = workbench.read(cx);
+    let relay = state.relay.as_ref()?;
+    let mut menu = div()
+        .absolute()
+        .right(px(30.0))
+        .top(px(85.0))
+        .w(px(260.0))
+        .p_2()
+        .rounded_md()
+        .bg(rgb(palette.panel))
+        .border_1()
+        .border_color(rgb(palette.border))
+        .flex()
+        .flex_col()
+        .gap_1()
+        .child(
+            div()
+                .text_xs()
+                .text_color(rgb(palette.muted))
+                .child("发送到 · 单跳接力"),
+        );
+    for r in relay
+        .result
+        .recommendations
+        .iter()
+        .filter(|r| r.confidence.is_banner())
+        .take(8)
+    {
+        let tool = r.tool_id;
+        let wb = workbench.clone();
+        menu = menu.child(
+            div()
+                .id(format!("relay-target-{}", tool.as_str()))
+                .px_2()
+                .py_2()
+                .text_sm()
+                .cursor_pointer()
+                .child(tool_name(tool))
+                .on_click(move |_, _, cx| {
+                    wb.update(cx, |s, cx| s.launch_relay(tool, cx));
+                }),
+        );
+    }
+    if relay.result.recommendations.is_empty() {
+        menu = menu.child(div().text_xs().child("没有可接收当前输出的工具"));
+    }
+    let wb = workbench.clone();
+    Some(
+        menu.child(
+            div()
+                .id("relay-close")
+                .text_xs()
+                .cursor_pointer()
+                .child("关闭 ×")
+                .on_click(move |_, _, cx| {
+                    wb.update(cx, |s, cx| {
+                        s.relay = None;
+                        cx.notify();
+                    });
+                }),
+        )
+        .into_any_element(),
+    )
 }

@@ -9,3 +9,4 @@ description = "Fuzzy search index for the command palette and sidebar (zero GPUI
 
 [dependencies]
 devtools-core = { path = "../devtools-core" }
+nucleo-matcher.workspace = true

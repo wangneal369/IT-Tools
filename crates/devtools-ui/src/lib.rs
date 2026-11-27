@@ -11,6 +11,7 @@ pub mod boot;
 pub mod labels;
 pub mod settings;
 pub mod shell;
+pub mod smart;
 pub mod theme;
 pub mod tool_view;
 pub mod window;

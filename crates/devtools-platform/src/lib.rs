@@ -13,6 +13,7 @@
 
 pub mod autostart;
 pub mod bridge;
+pub mod clipboard;
 pub mod hotkey;
 pub mod ipc;
 mod paths;

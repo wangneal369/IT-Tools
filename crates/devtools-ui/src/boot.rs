@@ -131,6 +131,56 @@ fn install_key_interceptor(workbench: &Entity<Workbench>, cx: &mut App) {
         let keystroke = &event.keystroke;
         let secondary = keystroke.modifiers.secondary(cx);
 
+        if let Some(workbench) = weak.upgrade() {
+            let palette = workbench.read(cx).palette_open;
+            if secondary && keystroke.key.eq_ignore_ascii_case("k") {
+                workbench.update(cx, |state, cx| state.open_palette(cx));
+                cx.stop_propagation();
+                return;
+            }
+            if palette {
+                match keystroke.key.as_str() {
+                    "up" => {
+                        workbench.update(cx, |s, cx| s.move_palette(-1, cx));
+                        cx.stop_propagation();
+                        return;
+                    }
+                    "down" => {
+                        workbench.update(cx, |s, cx| s.move_palette(1, cx));
+                        cx.stop_propagation();
+                        return;
+                    }
+                    "enter" => {
+                        workbench.update(cx, |s, cx| s.activate_palette(s.palette_selected, cx));
+                        cx.stop_propagation();
+                        return;
+                    }
+                    "escape" => {
+                        workbench.update(cx, |s, cx| s.close_palette(cx));
+                        cx.stop_propagation();
+                        return;
+                    }
+                    _ => {}
+                }
+            }
+            if secondary
+                && keystroke.key.eq_ignore_ascii_case("v")
+                && (keystroke.modifiers.shift || workbench.read(cx).active_tab().is_home())
+                && !palette
+            {
+                workbench.update(cx, |s, cx| s.smart_paste(true, cx));
+                cx.stop_propagation();
+                return;
+            }
+            if keystroke.key.eq_ignore_ascii_case("escape") && workbench.read(cx).relay.is_some() {
+                workbench.update(cx, |s, cx| {
+                    s.relay = None;
+                    cx.notify();
+                });
+                cx.stop_propagation();
+                return;
+            }
+        }
         if secondary && keystroke.key.eq_ignore_ascii_case("w") {
             if let Some(workbench) = weak.upgrade() {
                 workbench.update(cx, |state, cx| state.close_active_tab(cx));

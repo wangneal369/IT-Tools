@@ -19,11 +19,20 @@ global-hotkey = { workspace = true }
 interprocess = { workspace = true }
 muda = { workspace = true }
 tray-icon = { workspace = true }
+arboard = { workspace = true }
+imagesize = { workspace = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSPasteboard"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray", "NSString", "NSData", "NSURL"] }
 
 # Linux uses tray-icon's pure-Rust `ksni` (StatusNotifierItem over D-Bus)
 # backend: no GTK3 / libappindicator C dependency, no tokio.
 [target.'cfg(target_os = "linux")'.dependencies]
+x11rb = "0.13"
+percent-encoding = "2"
 tray-icon = { workspace = true, features = ["ksni"] }
 
 [dev-dependencies]
 tempfile = "3"
+static_assertions = "1"
