@@ -136,7 +136,7 @@ devtools-app (薄入口: 先行 CLI --toggle/--show/--silent 单实例转发秒�
 
 ## 7. 构建、打包分发、CI 门禁与三端真机验收基线
 
-- **工具链与 Profile**：`rust-toolchain.toml` 锁定 **`Rust 1.98`**（`edition = "2024"`），提交 `Cargo.lock`；Release 启用 `opt-level = 3`、`lto = "thin"`、`codegen-units = 1`、`strip = "symbols"`、`panic = "abort"`，单二进制体积红线 **未压缩 `≤ 45 MB` / 压缩分发包 `≤ 22 MB`**；Dev 对重计算与 UI 核心依赖设 `opt-level = 2`；Windows Release 强依赖 Windows 10/11 SDK `fxc.exe`。
+- **工具链与 Profile**：`rust-toolchain.toml` 锁定 **`Rust 1.98`**（`edition = "2024"`），提交 `Cargo.lock`；Release 启用 `opt-level = "s"`（`devtools-tools` / `devtools-detect` 保持 `opt-level = 3`）、`lto = "thin"`、`codegen-units = 1`、`strip = "symbols"`、`panic = "abort"`，单二进制体积红线 **未压缩 `≤ 45 MB` / 压缩分发包 `≤ 22 MB`**；Dev 对重计算与 UI 核心依赖设 `opt-level = 2`；Windows Release 强依赖 Windows 10/11 SDK `fxc.exe`。
 - **GitHub Releases 三端产物**（全附 `SHA256SUMS.txt`）：
   - **Windows (`x86_64`)**：安装器（`.msi` 或 NSIS `.exe`）+ 便携 `.zip`（初期无签名附 SmartScreen 说明，预留证书 Secret 槽位）；
   - **macOS (`aarch64`，按需 `x86_64`/Universal2)**：`DevTools.app` + `.dmg`（`CFBundleIdentifier = io.github.wangneal369.devtools`、`LSUIElement = false`；无证书做 ad-hoc 签名并回退 `LaunchAgent --silent`，预留 Developer ID + `notarytool` 槽位）；

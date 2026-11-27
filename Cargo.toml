@@ -45,11 +45,20 @@ muda = { version = "0.22", default-features = false }
 tray-icon = { version = "0.27", default-features = false }
 
 [profile.release]
-opt-level = 3
+# Optimize overall binary size (especially Linux Vulkan/wgpu/naga + GPUI UI
+# codegen) so all 3 platforms stay comfortably below the 45 MiB binary budget,
+# while keeping core tool & detection kernels at full opt-level = 3.
+opt-level = "s"
 lto = "thin"
 codegen-units = 1
 strip = "symbols"
 panic = "abort"
+
+[profile.release.package.devtools-tools]
+opt-level = 3
+
+[profile.release.package.devtools-detect]
+opt-level = 3
 
 # Dev builds keep the heavy UI/layout/image crates optimized so the workbench
 # stays responsive while tool kernels keep fast incremental builds. Every crate
