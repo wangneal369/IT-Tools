@@ -11,3 +11,7 @@ Uses the five default canonical triage labels (`needs-triage`, `needs-info`, `re
 ### Domain docs
 
 Single-context layout (`GLOSSARY.md` and `docs/adr/` at the repo root). See `docs/agents/domain.md`.
+
+### V1 Specification
+
+The settled V1 product and architecture master spec lives at `docs/specs/v1-spec.md` (indexing `GLOSSARY.md` and `docs/adr/0001`–`0005`). Read it before implementing any V1 milestone.
