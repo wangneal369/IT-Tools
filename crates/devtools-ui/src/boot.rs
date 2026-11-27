@@ -31,8 +31,7 @@ pub enum StartMode {
 /// and tray / hotkey / IPC commands would have no receiver. Keeping one strong
 /// handle in an app global keeps the workbench alive for the whole process.
 struct WorkbenchRoot {
-    /// Owned only to keep the entity alive; never read.
-    _entity: Entity<Workbench>,
+    entity: Entity<Workbench>,
 }
 
 impl Global for WorkbenchRoot {}
@@ -66,46 +65,64 @@ pub fn run(boot: AppBoot) {
     };
     let global_shortcut = settings.hotkeys.global_toggle.clone();
 
-    gpui_kit::application()
+    let app = gpui_kit::application()
         .with_quit_mode(QuitMode::Explicit)
-        .with_windowing(initial_windowing)
-        .run(move |cx| {
-            gpui_kit::init(cx);
+        .with_windowing(initial_windowing);
 
-            let platform = PlatformService::start(PlatformStartup {
-                instance,
-                global_shortcut,
-            });
+    // macOS Dock / Finder reopen raises the workbench when 0 windows are open.
+    app.on_reopen(|cx| {
+        if let Some(wb) = cx.try_global::<WorkbenchRoot>().map(|r| r.entity.clone()) {
+            window::show(&wb, cx, false);
+        }
+    });
 
-            let workbench = Workbench::new(
-                WorkbenchInit {
-                    store,
-                    settings,
-                    settings_notice,
-                    window_state,
-                    platform,
-                },
-                cx,
-            );
+    app.run(move |cx| {
+        gpui_kit::init(cx);
 
-            cx.set_global(WorkbenchRoot {
-                _entity: workbench.clone(),
-            });
-            install_key_interceptor(&workbench, cx);
-
-            match start {
-                StartMode::ShowWindow => window::show(&workbench, cx, false),
-                StartMode::ShowSettings => window::show(&workbench, cx, true),
-                StartMode::Silent => {
-                    // Headless: tray, hotkey and IPC stay alive, no window.
-                    window::set_macos_policy(cx, false);
-                    workbench.update(cx, |state, _| state.phase = Phase::DeepSleep);
-                }
-            }
-
-            // Keep the root view type linked even before its first window.
-            let _ = std::any::TypeId::of::<WorkbenchView>();
+        let platform = PlatformService::start(PlatformStartup {
+            instance,
+            global_shortcut,
         });
+
+        let workbench = Workbench::new(
+            WorkbenchInit {
+                store,
+                settings,
+                settings_notice,
+                window_state,
+                platform,
+            },
+            cx,
+        );
+
+        cx.set_global(WorkbenchRoot {
+            entity: workbench.clone(),
+        });
+        install_key_interceptor(&workbench, cx);
+
+        // Idempotent OS-quit hook (Cmd+Q / WM_ENDSESSION / cx.quit()) so
+        // WindowState is persisted and IPC / hotkey / tray tear down in order.
+        let quit_wb = workbench.clone();
+        cx.on_app_quit(move |cx| {
+            quit_wb.update(cx, |state, _| state.teardown_for_quit());
+            async {}
+        })
+        .detach();
+
+        match start {
+            StartMode::ShowWindow => window::show(&workbench, cx, false),
+            StartMode::ShowSettings => window::show(&workbench, cx, true),
+            StartMode::Silent => {
+                // Headless: tray, hotkey and IPC stay alive, no window.
+                let policy = workbench.read(cx).settings().platform.macos_dock_policy;
+                window::set_macos_policy(cx, policy, false);
+                workbench.update(cx, |state, _| state.phase = Phase::DeepSleep);
+            }
+        }
+
+        // Keep the root view type linked even before its first window.
+        let _ = std::any::TypeId::of::<WorkbenchView>();
+    });
 }
 
 fn install_key_interceptor(workbench: &Entity<Workbench>, cx: &mut App) {
@@ -122,16 +139,28 @@ fn install_key_interceptor(workbench: &Entity<Workbench>, cx: &mut App) {
             return;
         }
 
-        if keystroke.key.eq_ignore_ascii_case("escape") {
-            if let Some(workbench) = weak.upgrade() {
-                let settings_open = workbench.read(cx).is_settings_open();
-                if settings_open {
-                    workbench.update(cx, |state, cx| state.close_settings(cx));
-                } else if workbench.read(cx).active_window.is_some() {
-                    window::hide_to_tray(&workbench, cx);
-                }
+        if keystroke.key.eq_ignore_ascii_case("escape")
+            && let Some(workbench) = weak.upgrade()
+        {
+            let (settings_open, flyout_open, esc_to_tray, has_window) = {
+                let state = workbench.read(cx);
+                (
+                    state.is_settings_open(),
+                    state.flyout_category().is_some(),
+                    state.settings().residency.esc_to_tray,
+                    state.active_window.is_some(),
+                )
+            };
+            if settings_open {
+                workbench.update(cx, |state, cx| state.close_settings(cx));
+                cx.stop_propagation();
+            } else if flyout_open {
+                workbench.update(cx, |state, cx| state.close_flyout(cx));
+                cx.stop_propagation();
+            } else if esc_to_tray && has_window {
+                window::hide_to_tray(&workbench, cx);
+                cx.stop_propagation();
             }
-            cx.stop_propagation();
         }
     });
 

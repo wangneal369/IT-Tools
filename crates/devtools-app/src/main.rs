@@ -109,9 +109,17 @@ fn main() {
 
 /// Returns `Ok(None)` when help was printed.
 fn parse_args() -> Result<Option<Request>, String> {
+    parse_args_from(std::env::args().skip(1))
+}
+
+fn parse_args_from<I, S>(args: I) -> Result<Option<Request>, String>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
     let mut request = Request::Show;
-    for arg in std::env::args().skip(1) {
-        match arg.as_str() {
+    for arg in args {
+        match arg.as_ref() {
             "--silent" => request = Request::Silent,
             "--toggle" => request = Request::Toggle,
             "--show" => request = Request::ShowExplicit,
@@ -181,5 +189,32 @@ fn load_window_state(store: &ConfigStore) -> WindowState {
             eprintln!("[devtools] 读取窗口状态失败，使用默认值：{err}");
             WindowState::default()
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Request, parse_args_from};
+    use devtools_platform::IpcCommand;
+
+    #[test]
+    fn cli_flags_parse_into_expected_requests_and_ipc_commands() {
+        assert_eq!(parse_args_from(Vec::<&str>::new()), Ok(Some(Request::Show)));
+        assert_eq!(parse_args_from(["--show"]), Ok(Some(Request::ShowExplicit)));
+        assert_eq!(parse_args_from(["--toggle"]), Ok(Some(Request::Toggle)));
+        assert_eq!(parse_args_from(["--settings"]), Ok(Some(Request::Settings)));
+        assert_eq!(parse_args_from(["--silent"]), Ok(Some(Request::Silent)));
+        assert_eq!(
+            parse_args_from(["--quit-running"]),
+            Ok(Some(Request::QuitRunning))
+        );
+        assert_eq!(parse_args_from(["--help"]), Ok(None));
+        assert!(parse_args_from(["--bogus"]).is_err());
+
+        assert_eq!(Request::Show.ipc_command(), IpcCommand::Show);
+        assert_eq!(Request::ShowExplicit.ipc_command(), IpcCommand::Show);
+        assert_eq!(Request::Toggle.ipc_command(), IpcCommand::Toggle);
+        assert_eq!(Request::Settings.ipc_command(), IpcCommand::OpenSettings);
+        assert_eq!(Request::QuitRunning.ipc_command(), IpcCommand::Quit);
     }
 }

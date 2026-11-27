@@ -5,22 +5,30 @@
 //! grace period the whole graphical environment is detached with
 //! `WindowingRequest::Headless`.
 
+use devtools_core::MacosDockPolicy;
 use gpui_kit::*;
 
 use crate::shell::WorkbenchView;
-use crate::workspace::{Phase, Workbench, geometry_from_bounds, window_bounds_from_state};
+use crate::workspace::{
+    PendingWake, Phase, Workbench, geometry_from_bounds, window_bounds_from_state,
+};
 
 /// Raise the window and focus it; creates or re-attaches it as needed.
+///
+/// Re-attachment from `DeepSleep` (`WindowingRequest::Headless`) is serialized
+/// through `Workbench::pending_wake` so concurrent tray/hotkey/IPC wakes merge
+/// instead of issuing overlapping transitions or opening duplicate windows.
 pub fn show(workbench: &Entity<Workbench>, cx: &mut App, open_settings: bool) {
-    workbench.update(cx, |state, cx| {
+    let dock_policy = workbench.update(cx, |state, cx| {
         state.sleep_timer = None;
         if open_settings {
             state.open_settings(cx);
         }
         cx.notify();
+        state.settings().platform.macos_dock_policy
     });
 
-    set_macos_policy(cx, true);
+    set_macos_policy(cx, dock_policy, true);
 
     if let Some(handle) = workbench.read(cx).active_window {
         let focused = handle
@@ -43,21 +51,60 @@ pub fn show(workbench: &Entity<Workbench>, cx: &mut App, open_settings: bool) {
     let needs_reattach =
         cx.graphical_environment().is_none() || workbench.read(cx).phase() == Phase::DeepSleep;
     if needs_reattach {
-        let task = cx.request_windowing(WindowingRequest::Windowed(GraphicalEnvironment::detect()));
-        let weak = workbench.downgrade();
-        cx.spawn(async move |cx| {
-            let result = task.await;
-            cx.update(|cx| {
-                if let Err(err) = result {
-                    eprintln!("[devtools] request_windowing(Windowed) failed: {err:#}");
-                }
-                if let Some(workbench) = weak.upgrade() {
-                    create_main_window(&workbench, cx);
+        // Coalesce duplicate wake requests while a display reattach is in flight.
+        if workbench.read(cx).pending_wake.is_some() {
+            workbench.update(cx, |state, _| {
+                if let Some(pending) = state.pending_wake.as_mut() {
+                    pending.open_settings |= open_settings;
                 }
             });
-        })
-        .detach();
-    } else {
+            return;
+        }
+
+        let transition =
+            cx.request_windowing(WindowingRequest::Windowed(GraphicalEnvironment::detect()));
+        let weak = workbench.downgrade();
+        let task = cx.spawn(async move |cx| {
+            let result = transition.await;
+            cx.update(|cx| {
+                let Some(workbench) = weak.upgrade() else {
+                    return;
+                };
+                let merged_open_settings = workbench.update(cx, |state, _| {
+                    state
+                        .pending_wake
+                        .take()
+                        .map(|pending| pending.open_settings)
+                        .unwrap_or(false)
+                });
+                match result {
+                    Ok(()) => {
+                        if merged_open_settings {
+                            workbench.update(cx, |state, cx| state.open_settings(cx));
+                        }
+                        if workbench.read(cx).active_window.is_none() {
+                            create_main_window(&workbench, cx);
+                        }
+                    }
+                    Err(err) => {
+                        eprintln!("[devtools] request_windowing(Windowed) failed: {err:#}");
+                        let policy = workbench.read(cx).settings().platform.macos_dock_policy;
+                        set_macos_policy(cx, policy, false);
+                        workbench.update(cx, |state, cx| {
+                            state.phase = Phase::DeepSleep;
+                            state.set_status(format!("恢复图形环境失败：{err:#}"), cx);
+                        });
+                    }
+                }
+            });
+        });
+        workbench.update(cx, |state, _| {
+            state.pending_wake = Some(PendingWake {
+                open_settings,
+                _task: task,
+            });
+        });
+    } else if workbench.read(cx).active_window.is_none() {
         create_main_window(workbench, cx);
     }
 }
@@ -114,7 +161,11 @@ pub fn ordered_quit(workbench: &Entity<Workbench>, cx: &mut App) {
 fn create_main_window(workbench: &Entity<Workbench>, cx: &mut App) {
     let bounds = {
         let state = workbench.read(cx);
-        window_bounds_from_state(&state.window_state, cx)
+        window_bounds_from_state(
+            &state.window_state,
+            state.settings().residency.wake_placement,
+            cx,
+        )
     };
 
     let options = WindowOptions {
@@ -169,17 +220,24 @@ fn create_main_window(workbench: &Entity<Workbench>, cx: &mut App) {
     }
 }
 
-pub(crate) fn set_macos_policy(cx: &mut App, regular: bool) {
+pub(crate) fn set_macos_policy(cx: &mut App, policy: MacosDockPolicy, window_open: bool) {
     #[cfg(target_os = "macos")]
     {
-        cx.set_activation_policy(if regular {
-            ActivationPolicy::Regular
-        } else {
-            ActivationPolicy::Accessory
-        });
+        let activation = match policy {
+            MacosDockPolicy::Always => ActivationPolicy::Regular,
+            MacosDockPolicy::MenuBarOnly => ActivationPolicy::Accessory,
+            MacosDockPolicy::ActiveWindowOnly => {
+                if window_open {
+                    ActivationPolicy::Regular
+                } else {
+                    ActivationPolicy::Accessory
+                }
+            }
+        };
+        cx.set_activation_policy(activation);
     }
     #[cfg(not(target_os = "macos"))]
     {
-        let _ = (cx, regular);
+        let _ = (cx, policy, window_open);
     }
 }

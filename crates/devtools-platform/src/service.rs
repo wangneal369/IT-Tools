@@ -77,6 +77,10 @@ impl PlatformService {
         self.hotkey.status().clone()
     }
 
+    pub fn hotkey_last_error(&self) -> Option<&str> {
+        self.hotkey.last_error()
+    }
+
     /// Live re-register; returns the observed status (may be `Degraded`).
     pub fn apply_hotkey(&mut self, shortcut: Option<&str>) -> HotkeyStatus {
         self.hotkey.apply(shortcut)

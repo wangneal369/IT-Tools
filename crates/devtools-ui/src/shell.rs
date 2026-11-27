@@ -7,6 +7,7 @@
 
 use devtools_core::{Category, TabBarMode, ToolId};
 use gpui_kit::component::scroll::ScrollableElement;
+use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 
 use crate::labels::{category_glyph, category_label, tool_hint, tool_name, tools_in};
@@ -16,7 +17,6 @@ use crate::workspace::{HomeView, Phase, TabKind, Workbench, geometry_from_bounds
 
 pub struct WorkbenchView {
     workbench: Entity<Workbench>,
-    flyout: Option<Category>,
     _bounds_subscription: Subscription,
 }
 
@@ -31,7 +31,6 @@ impl WorkbenchView {
 
         Self {
             workbench,
-            flyout: None,
             _bounds_subscription: bounds_subscription,
         }
     }
@@ -40,7 +39,6 @@ impl WorkbenchView {
 impl Render for WorkbenchView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let workbench = self.workbench.clone();
-        let view = cx.entity();
 
         let (
             palette,
@@ -48,6 +46,7 @@ impl Render for WorkbenchView {
             collapsed_setting,
             tab_bar_mode,
             settings_open,
+            flyout_category,
             phase,
             status_line,
             hotkey_label,
@@ -60,6 +59,7 @@ impl Render for WorkbenchView {
                 state.settings().layout.sidebar_collapsed,
                 state.settings().layout.tab_bar_mode,
                 state.is_settings_open(),
+                state.flyout_category(),
                 state.phase(),
                 state.status_line().to_owned(),
                 state.platform().hotkey_status().label(),
@@ -69,7 +69,7 @@ impl Render for WorkbenchView {
 
         let collapsed = collapsed_setting || window.viewport_size().width.as_f32() <= 820.0;
 
-        let rail = render_rail(&workbench, &view, palette, collapsed, cx);
+        let rail = render_rail(&workbench, palette, collapsed, cx);
         let tab_bar = render_tab_bar(&workbench, palette, tab_bar_mode, cx);
         let content = render_content(&workbench, palette, cx);
 
@@ -104,8 +104,7 @@ impl Render for WorkbenchView {
             .child(format!("热键：{hotkey_label}"));
 
         let flyout = if collapsed {
-            self.flyout
-                .map(|category| render_flyout(&workbench, &view, palette, category))
+            flyout_category.map(|category| render_flyout(&workbench, palette, category))
         } else {
             None
         };
@@ -126,7 +125,6 @@ impl Render for WorkbenchView {
 
 fn render_rail(
     workbench: &Entity<Workbench>,
-    view: &Entity<WorkbenchView>,
     palette: Palette,
     collapsed: bool,
     cx: &App,
@@ -187,7 +185,6 @@ fn render_rail(
 
     for (index, category) in Category::ALL.into_iter().enumerate() {
         let wb = workbench.clone();
-        let view = view.clone();
         let active = matches!(home_view, HomeView::Category(current) if current == category);
         rail = rail.child(nav_item(
             palette,
@@ -197,10 +194,9 @@ fn render_rail(
             collapsed,
             active,
             move |cx| {
-                wb.update(cx, |state, cx| state.open_category(category, cx));
-                view.update(cx, |this, cx| {
-                    this.flyout = if collapsed { Some(category) } else { None };
-                    cx.notify();
+                wb.update(cx, |state, cx| {
+                    state.open_category(category, cx);
+                    state.set_flyout_category(if collapsed { Some(category) } else { None }, cx);
                 });
             },
         ));
@@ -306,7 +302,15 @@ fn render_tab_bar(
         .collect();
     let active = workbench.read(cx).active_index();
 
-    let mut tabs_row = div().flex().flex_wrap().gap_1().flex_1();
+    let mut tabs_row = match mode {
+        TabBarMode::MultiRowGrid => div().flex().flex_wrap().gap_1().flex_1().max_h(px(108.0)),
+        TabBarMode::SingleRowScroll => div()
+            .flex()
+            .flex_nowrap()
+            .gap_1()
+            .flex_1()
+            .overflow_hidden(),
+    };
     for (index, title, closable) in tabs {
         let is_active = index == active;
         let wb = workbench.clone();
@@ -317,6 +321,8 @@ fn render_tab_bar(
             .gap_2()
             .px_3()
             .py_1()
+            .when(mode == TabBarMode::MultiRowGrid, |el| el.min_w(px(120.0)))
+            .when(mode == TabBarMode::SingleRowScroll, |el| el.flex_shrink_0())
             .rounded_md()
             .cursor_pointer()
             .text_xs()
@@ -367,6 +373,11 @@ fn render_tab_bar(
         TabBarMode::SingleRowScroll => "单行",
     };
 
+    let tabs_container: AnyElement = match mode {
+        TabBarMode::MultiRowGrid => tabs_row.overflow_y_scrollbar().into_any_element(),
+        TabBarMode::SingleRowScroll => tabs_row.overflow_x_scrollbar().into_any_element(),
+    };
+
     div()
         .flex()
         .items_center()
@@ -377,7 +388,7 @@ fn render_tab_bar(
         .bg(rgb(palette.bg))
         .border_b_1()
         .border_color(rgb(palette.border))
-        .child(tabs_row)
+        .child(tabs_container)
         .child(
             div()
                 .id("tab-mode-toggle")
@@ -627,14 +638,12 @@ fn tool_grid(workbench: &Entity<Workbench>, palette: Palette, category: Category
 
 fn render_flyout(
     workbench: &Entity<Workbench>,
-    view: &Entity<WorkbenchView>,
     palette: Palette,
     category: Category,
 ) -> AnyElement {
     let mut list = div().flex().flex_col().gap_1();
     for tool in tools_in(category) {
         let wb = workbench.clone();
-        let view = view.clone();
         list = list.child(
             div()
                 .id(format!("flyout-{}", tool.as_str()))
@@ -646,10 +655,9 @@ fn render_flyout(
                 .hover(|style| style.bg(rgb(palette.panel_alt)))
                 .child(tool_name(tool))
                 .on_click(move |_, _, cx| {
-                    wb.update(cx, |state, cx| state.open_tool(tool, cx));
-                    view.update(cx, |this, cx| {
-                        this.flyout = None;
-                        cx.notify();
+                    wb.update(cx, |state, cx| {
+                        state.open_tool(tool, cx);
+                        state.close_flyout(cx);
                     });
                 }),
         );

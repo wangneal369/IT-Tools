@@ -132,7 +132,7 @@ pub struct IpcServer {
 impl IpcServer {
     /// Stop the accept loop and join its thread.
     pub fn shutdown(&mut self) {
-        let _ = send_wire(&self.name, SHUTDOWN_TOKEN);
+        let _ = send_wire(&self.name, SHUTDOWN_TOKEN, false);
         if let Some(handle) = self.handle.take() {
             let _ = handle.join();
         }
@@ -186,14 +186,22 @@ pub fn acquire(name: &IpcName) -> Result<Instance, IpcError> {
 }
 
 /// Forward one command to the primary instance.
+///
+/// On Windows, the primary replies with its PID (`pid:<u32>\n`) so the
+/// secondary process grants foreground activation via
+/// `AllowSetForegroundWindow(pid)` before exiting (ADR-0002 / spec §3.1).
 pub fn send(name: &IpcName, command: IpcCommand) -> Result<(), IpcError> {
-    send_wire(name, command.as_wire()).map_err(|err| {
+    let reply = send_wire(name, command.as_wire(), true).map_err(|err| {
         if err.kind() == io::ErrorKind::NotFound || err.kind() == io::ErrorKind::ConnectionRefused {
             IpcError::NotRunning
         } else {
             IpcError::Io(err)
         }
-    })
+    })?;
+    if let Some(pid) = reply.and_then(|line| parse_pid_ack(&line)) {
+        allow_foreground_pid(pid);
+    }
+    Ok(())
 }
 
 /// Serve commands from the primary listener on a background thread.
@@ -202,6 +210,7 @@ pub fn serve(guard: InstanceGuard, sink: impl FnMut(IpcCommand) + Send + 'static
     let Some(listener) = guard.listener else {
         return IpcServer { name, handle: None };
     };
+    let pid = std::process::id();
     let handle = thread::Builder::new()
         .name("devtools-ipc".to_owned())
         .spawn(move || {
@@ -220,6 +229,9 @@ pub fn serve(guard: InstanceGuard, sink: impl FnMut(IpcCommand) + Send + 'static
                     break;
                 }
                 if let Some(command) = IpcCommand::from_wire(trimmed) {
+                    let mut stream = reader.into_inner();
+                    let _ = writeln!(stream, "pid:{pid}");
+                    let _ = stream.flush();
                     sink(command);
                 }
             }
@@ -232,11 +244,40 @@ pub fn serve(guard: InstanceGuard, sink: impl FnMut(IpcCommand) + Send + 'static
     }
 }
 
-fn send_wire(name: &IpcName, wire: &str) -> io::Result<()> {
+fn parse_pid_ack(line: &str) -> Option<u32> {
+    line.trim().strip_prefix("pid:")?.parse::<u32>().ok()
+}
+
+#[cfg(windows)]
+fn allow_foreground_pid(pid: u32) {
+    #[link(name = "user32")]
+    unsafe extern "system" {
+        fn AllowSetForegroundWindow(dw_process_id: u32) -> i32;
+    }
+    // SAFETY: `AllowSetForegroundWindow` is a standard Win32 user32 API taking
+    // a process ID; failure is benign (e.g. caller not in foreground).
+    unsafe {
+        let _ = AllowSetForegroundWindow(pid);
+    }
+}
+
+#[cfg(not(windows))]
+fn allow_foreground_pid(_pid: u32) {}
+
+fn send_wire(name: &IpcName, wire: &str, expect_ack: bool) -> io::Result<Option<String>> {
     let mut stream = connect_stream(name, CONNECT_ATTEMPTS)?;
     stream.write_all(wire.as_bytes())?;
     stream.write_all(b"\n")?;
-    stream.flush()
+    stream.flush()?;
+    if !expect_ack {
+        return Ok(None);
+    }
+    let mut reader = BufReader::new(stream);
+    let mut reply = String::new();
+    match reader.read_line(&mut reply) {
+        Ok(0) | Err(_) => Ok(None),
+        Ok(_) => Ok(Some(reply)),
+    }
 }
 
 /// Windows reports an occupied named pipe as `ERROR_ACCESS_DENIED` (5) or

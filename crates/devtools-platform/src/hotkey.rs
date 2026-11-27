@@ -261,6 +261,7 @@ pub struct GlobalHotkey {
     current_id: Arc<AtomicU32>,
     sender: Sender<PlatformCommand>,
     status: HotkeyStatus,
+    last_error: Option<String>,
 }
 
 impl GlobalHotkey {
@@ -271,6 +272,7 @@ impl GlobalHotkey {
             current_id: Arc::new(AtomicU32::new(0)),
             sender,
             status: HotkeyStatus::Disabled,
+            last_error: None,
         }
     }
 
@@ -278,26 +280,27 @@ impl GlobalHotkey {
         &self.status
     }
 
+    /// Most recent registration error even when a previous binding stayed active.
+    pub fn last_error(&self) -> Option<&str> {
+        self.last_error.as_deref()
+    }
+
     /// Register `shortcut`, replacing the previous binding on success.
     ///
-    /// On failure the previous binding stays active and a `Degraded` status is
-    /// returned so the settings UI can roll its field back.
+    /// On failure the previous binding stays active, `last_error` records the
+    /// reason for the settings banner, and a `Degraded` status is returned so
+    /// the settings UI can roll its field back.
     pub fn apply(&mut self, shortcut: Option<&str>) -> HotkeyStatus {
         let Some(shortcut) = shortcut else {
             self.unregister_current();
             self.status = HotkeyStatus::Disabled;
+            self.last_error = None;
             return self.status.clone();
         };
 
-        if let Some((active, _)) = &self.current
-            && active == shortcut
-            && !self.status.is_degraded()
-        {
-            return self.status.clone();
-        }
-
         if let Some(reason) = wayland_degradation() {
             self.unregister_current();
+            self.last_error = Some(reason.clone());
             self.status = HotkeyStatus::Degraded {
                 requested: shortcut.to_owned(),
                 reason,
@@ -308,34 +311,54 @@ impl GlobalHotkey {
         let parsed = match parse_shortcut(shortcut) {
             Ok(parsed) => parsed,
             Err(err) => {
+                let reason = err.to_string();
+                self.last_error = Some(reason.clone());
                 return HotkeyStatus::Degraded {
                     requested: shortcut.to_owned(),
-                    reason: err.to_string(),
+                    reason,
                 };
             }
         };
+
+        let hotkey = parsed.to_hotkey();
+        if let Some((_, active_hotkey)) = &self.current
+            && *active_hotkey == hotkey
+            && !self.status.is_degraded()
+        {
+            // Semantically identical chord (e.g. `Control+Option+Space` vs
+            // `Ctrl+Alt+Space`): keep the OS registration and refresh the label.
+            self.current = Some((shortcut.to_owned(), hotkey));
+            self.status = HotkeyStatus::Active {
+                shortcut: shortcut.to_owned(),
+            };
+            self.last_error = None;
+            return self.status.clone();
+        }
 
         if self.manager.is_none() {
             match GlobalHotKeyManager::new() {
                 Ok(manager) => self.manager = Some(manager),
                 Err(err) => {
+                    let reason = format!("热键管理器初始化失败: {err}");
+                    self.last_error = Some(reason.clone());
                     return HotkeyStatus::Degraded {
                         requested: shortcut.to_owned(),
-                        reason: format!("热键管理器初始化失败: {err}"),
+                        reason,
                     };
                 }
             }
         }
 
-        let hotkey = parsed.to_hotkey();
         let id = hotkey.id;
         let Some(manager) = self.manager.as_ref() else {
             unreachable!("manager was just created");
         };
         if let Err(err) = manager.register(hotkey) {
+            let reason = format!("已被其他程序占用或被系统拒绝: {err}");
+            self.last_error = Some(reason.clone());
             return HotkeyStatus::Degraded {
                 requested: shortcut.to_owned(),
-                reason: format!("已被其他程序占用或被系统拒绝: {err}"),
+                reason,
             };
         }
 
@@ -355,6 +378,7 @@ impl GlobalHotkey {
         self.status = HotkeyStatus::Active {
             shortcut: shortcut.to_owned(),
         };
+        self.last_error = None;
         self.status.clone()
     }
 
@@ -363,6 +387,7 @@ impl GlobalHotkey {
         self.unregister_current();
         self.manager = None;
         self.status = HotkeyStatus::Disabled;
+        self.last_error = None;
     }
 
     fn unregister_current(&mut self) {
@@ -373,17 +398,31 @@ impl GlobalHotkey {
     }
 }
 
-#[cfg(target_os = "linux")]
-fn wayland_degradation() -> Option<String> {
-    let wayland = std::env::var_os("WAYLAND_DISPLAY").is_some();
-    let x11 = std::env::var_os("DISPLAY").is_some();
-    if wayland && !x11 {
+/// Pure Wayland session check: if `WAYLAND_DISPLAY` is set OR
+/// `XDG_SESSION_TYPE=wayland`, X11 global-hotkey registration must be skipped
+/// even when XWayland also sets `DISPLAY` (spec §3.1).
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub(crate) fn detect_wayland_degradation(
+    wayland_display: Option<&str>,
+    session_type: Option<&str>,
+) -> Option<String> {
+    let has_wayland_display = wayland_display.is_some_and(|v| !v.trim().is_empty());
+    let is_wayland_session = session_type.is_some_and(|v| v.trim().eq_ignore_ascii_case("wayland"));
+    if has_wayland_display || is_wayland_session {
         Some(
-            "Wayland 会话下 global-hotkey 不可用，请使用托盘或 `devtools --toggle` 兜底".to_owned(),
+            "Wayland 会话下 X11 全局热键不可用，请通过系统快捷键绑定 `devtools --toggle` 或使用托盘唤起"
+                .to_owned(),
         )
     } else {
         None
     }
+}
+
+#[cfg(target_os = "linux")]
+fn wayland_degradation() -> Option<String> {
+    let wayland = std::env::var("WAYLAND_DISPLAY").ok();
+    let session = std::env::var("XDG_SESSION_TYPE").ok();
+    detect_wayland_degradation(wayland.as_deref(), session.as_deref())
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -443,5 +482,33 @@ mod tests {
         };
         assert!(status.is_degraded());
         assert!(status.label().contains("conflict"));
+    }
+
+    #[test]
+    fn wayland_degrades_even_when_xwayland_sets_display() {
+        assert!(detect_wayland_degradation(Some("wayland-0"), Some("wayland")).is_some());
+        assert!(detect_wayland_degradation(Some("wayland-0"), Some("x11")).is_some());
+        assert!(detect_wayland_degradation(None, Some("Wayland")).is_some());
+        assert!(detect_wayland_degradation(None, Some("x11")).is_none());
+        assert!(detect_wayland_degradation(Some(""), None).is_none());
+    }
+
+    #[test]
+    fn shortcut_aliases_produce_equal_hotkeys() {
+        let win = parse_shortcut("Ctrl+Alt+Space").unwrap().to_hotkey();
+        let mac = parse_shortcut("Control+Option+Space").unwrap().to_hotkey();
+        assert_eq!(win, mac);
+    }
+
+    #[test]
+    fn invalid_rebind_records_last_error_without_panicking() {
+        let (tx, _rx) = async_channel::unbounded();
+        let mut hk = GlobalHotkey::new(tx);
+        let status = hk.apply(Some("SingleKeyOnly"));
+        assert!(status.is_degraded());
+        assert!(hk.last_error().is_some());
+        let cleared = hk.apply(None);
+        assert_eq!(cleared, HotkeyStatus::Disabled);
+        assert!(hk.last_error().is_none());
     }
 }

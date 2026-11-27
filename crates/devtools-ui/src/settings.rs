@@ -1,7 +1,7 @@
 //! Settings drawer (spec §5): edits `AppSettings`, persists atomically, shows
 //! OS-queried autostart and any hotkey degradation banner.
 
-use devtools_core::{CloseBehavior, Locale, MacosDockPolicy, Theme};
+use devtools_core::{AutoJumpMode, CloseBehavior, Locale, MacosDockPolicy, Theme, WakePlacement};
 use devtools_platform::HotkeyStatus;
 use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::*;
@@ -13,6 +13,7 @@ pub fn panel(workbench: &Entity<Workbench>, palette: Palette, cx: &App) -> AnyEl
     let state = workbench.read(cx);
     let settings = state.settings().clone();
     let hotkey_status = state.platform().hotkey_status();
+    let hotkey_last_error = state.platform().hotkey_last_error().map(str::to_owned);
     let tray_error = state.platform().tray_error().map(str::to_owned);
     let settings_notice = state.settings_notice().map(str::to_owned);
     let autostart = state.autostart_state().cloned();
@@ -58,6 +59,11 @@ pub fn panel(workbench: &Entity<Workbench>, palette: Palette, cx: &App) -> AnyEl
     }
     if let HotkeyStatus::Degraded { reason, .. } = &hotkey_status {
         body = body.child(banner(palette, format!("全局热键降级：{reason}")));
+    } else if let Some(err) = hotkey_last_error {
+        body = body.child(banner(
+            palette,
+            format!("最近一次热键修改失败（已保持旧绑定）：{err}"),
+        ));
     }
 
     // ---- 外观 -------------------------------------------------------
@@ -162,6 +168,77 @@ pub fn panel(workbench: &Entity<Workbench>, palette: Palette, cx: &App) -> AnyEl
             let wb = workbench.clone();
             move |value, cx| {
                 wb.update(cx, |state, cx| state.set_smart_detection(value, cx));
+            }
+        },
+    ));
+    body = body.child(toggle_row(
+        palette,
+        "Esc 收起到托盘",
+        "无弹窗/浮层时按 Esc 隐藏主窗口，立即生效",
+        settings.residency.esc_to_tray,
+        {
+            let wb = workbench.clone();
+            move |value, cx| {
+                wb.update(cx, |state, cx| state.set_esc_to_tray(value, cx));
+            }
+        },
+    ));
+    body = body.child(segmented_row(
+        palette,
+        "唤起位置",
+        &[
+            ("跟随屏幕居中", WakePlacement::FollowCursorScreen),
+            ("记忆上次位置", WakePlacement::RememberLastPosition),
+        ],
+        settings.residency.wake_placement,
+        {
+            let wb = workbench.clone();
+            move |placement, cx| {
+                wb.update(cx, |state, cx| state.set_wake_placement(placement, cx));
+            }
+        },
+    ));
+    body = body.child(toggle_row(
+        palette,
+        "标签骨架恢复",
+        "重启后仅恢复空标签实例，绝不落盘输入/输出",
+        settings.navigation.tab_skeleton_restore,
+        {
+            let wb = workbench.clone();
+            move |value, cx| {
+                wb.update(cx, |state, cx| state.set_tab_skeleton_restore(value, cx));
+            }
+        },
+    ));
+    body = body.child(segmented_row(
+        palette,
+        "自动跳转",
+        &[
+            ("关闭", AutoJumpMode::Off),
+            ("仅首页", AutoJumpMode::HomeOnly),
+            ("总是", AutoJumpMode::Always),
+        ],
+        settings.smart_detection.auto_jump,
+        {
+            let wb = workbench.clone();
+            move |mode, cx| {
+                wb.update(cx, |state, cx| state.set_auto_jump_mode(mode, cx));
+            }
+        },
+    ));
+    body = body.child(toggle_row(
+        palette,
+        "敏感复制排除历史",
+        "密码/JWT 复制时向 OS 剪贴板写入排除历史标记",
+        settings
+            .smart_detection
+            .exclude_sensitive_from_clipboard_history,
+        {
+            let wb = workbench.clone();
+            move |value, cx| {
+                wb.update(cx, |state, cx| {
+                    state.set_sensitive_copy_exclude_history(value, cx)
+                });
             }
         },
     ));
@@ -274,11 +351,19 @@ pub fn panel(workbench: &Entity<Workbench>, palette: Palette, cx: &App) -> AnyEl
         {
             let wb = workbench.clone();
             move |policy, cx| {
-                wb.update(cx, |state, cx| {
-                    state.settings.platform.macos_dock_policy = policy;
-                    state.persist_settings();
-                    cx.notify();
-                });
+                wb.update(cx, |state, cx| state.set_macos_dock_policy(policy, cx));
+            }
+        },
+    ));
+    body = body.child(toggle_row(
+        palette,
+        "Linux 无托盘强制常驻",
+        "仅高级用户：关闭窗口不退出，需用 --toggle 唤起",
+        settings.platform.linux_force_tray_without_sni,
+        {
+            let wb = workbench.clone();
+            move |value, cx| {
+                wb.update(cx, |state, cx| state.set_linux_force_tray(value, cx));
             }
         },
     ));

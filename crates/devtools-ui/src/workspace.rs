@@ -4,17 +4,25 @@
 //! lifecycle phase live in this `Entity`, which survives window destruction and
 //! `WindowingRequest::Headless`. Windows are disposable projections.
 
+use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use devtools_core::{
-    AppSettings, Category, CloseBehavior, ToolId, WINDOW_STATE_SCHEMA_VERSION, WindowGeometry,
-    WindowState,
+    AppSettings, AutoJumpMode, Category, CloseBehavior, MacosDockPolicy, ToolId,
+    WINDOW_STATE_SCHEMA_VERSION, WakePlacement, WindowGeometry, WindowState,
 };
 use devtools_platform::{ConfigStore, PlatformCommand, PlatformService};
 use gpui_kit::*;
 
 use crate::tool_view::{ToolViewContext, ToolViewRegistry};
 use crate::window::{self, set_macos_policy};
+
+/// Tracks an in-flight `DeepSleep -> Windowed` display transition so repeated
+/// wakes coalesce instead of racing or creating duplicate windows.
+pub(crate) struct PendingWake {
+    pub(crate) open_settings: bool,
+    pub(crate) _task: Task<()>,
+}
 
 /// Grace period before Warm Standby decays into Deep Sleep / Headless (spec §3.1).
 pub const WARM_STANDBY_GRACE: Duration = Duration::from_secs(60);
@@ -121,19 +129,23 @@ pub struct Workbench {
     pub(crate) tabs: Vec<TabEntry>,
     pub(crate) active: usize,
     next_tab_id: u64,
+    tool_instance_counters: HashMap<ToolId, u32>,
     pub(crate) recents: Recents,
     pub(crate) home_view: HomeView,
+    pub(crate) flyout_category: Option<Category>,
     pub(crate) settings_open: bool,
     pub(crate) autostart_state: Option<Result<bool, String>>,
     pub(crate) active_window: Option<AnyWindowHandle>,
     pub(crate) phase: Phase,
     pub(crate) sleep_timer: Option<Task<()>>,
+    pub(crate) pending_wake: Option<PendingWake>,
     pub(crate) registry: ToolViewRegistry,
     pub(crate) status_line: String,
     /// Kept alive for the process lifetime so the app-level key interceptor
     /// (`Ctrl/Cmd+W`, `Esc`) stays registered.
     pub(crate) key_interceptor: Option<Subscription>,
     last_geometry_persist: Option<Instant>,
+    torn_down: bool,
 }
 
 impl Workbench {
@@ -161,17 +173,21 @@ impl Workbench {
             }],
             active: 0,
             next_tab_id: 1,
+            tool_instance_counters: HashMap::new(),
             recents: Recents::default(),
             home_view: HomeView::Overview,
+            flyout_category: None,
             settings_open: false,
             autostart_state: None,
             active_window: None,
             phase: Phase::DeepSleep,
             sleep_timer: None,
+            pending_wake: None,
             registry: ToolViewRegistry::new(),
             status_line: "就绪".to_owned(),
             key_interceptor: None,
             last_geometry_persist: None,
+            torn_down: false,
         });
 
         entity.update(cx, |workbench, cx| {
@@ -225,6 +241,21 @@ impl Workbench {
         self.settings_open
     }
 
+    pub fn flyout_category(&self) -> Option<Category> {
+        self.flyout_category
+    }
+
+    pub fn set_flyout_category(&mut self, category: Option<Category>, cx: &mut Context<Self>) {
+        self.flyout_category = category;
+        cx.notify();
+    }
+
+    pub fn close_flyout(&mut self, cx: &mut Context<Self>) {
+        if self.flyout_category.take().is_some() {
+            cx.notify();
+        }
+    }
+
     pub fn status_line(&self) -> &str {
         &self.status_line
     }
@@ -248,14 +279,10 @@ impl Workbench {
 
     // ---------------------------------------------------------------- tabs
 
-    /// Open a fresh instance of `tool`; the same tool may be open many times.
+    /// Open a fresh instance of `tool`; the same tool may be open many times
+    /// with monotonically increasing instance numbers (`#1`, `#2`, ...).
     pub fn open_tool(&mut self, tool: ToolId, cx: &mut Context<Self>) {
-        let instance = self
-            .tabs
-            .iter()
-            .filter(|tab| matches!(tab.kind, TabKind::Tool { tool_id, .. } if tool_id == tool))
-            .count() as u32
-            + 1;
+        let instance = next_instance_number(&mut self.tool_instance_counters, tool);
         let id = TabInstanceId(self.next_tab_id);
         self.next_tab_id += 1;
 
@@ -393,6 +420,53 @@ impl Workbench {
     pub fn set_close_behavior(&mut self, behavior: CloseBehavior, cx: &mut Context<Self>) {
         self.settings.residency.close = behavior;
         self.persist_settings();
+        cx.notify();
+    }
+
+    pub fn set_esc_to_tray(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        self.settings.residency.esc_to_tray = enabled;
+        self.persist_settings();
+        cx.notify();
+    }
+
+    pub fn set_wake_placement(&mut self, placement: WakePlacement, cx: &mut Context<Self>) {
+        self.settings.residency.wake_placement = placement;
+        self.persist_settings();
+        cx.notify();
+    }
+
+    pub fn set_tab_skeleton_restore(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        self.settings.navigation.tab_skeleton_restore = enabled;
+        self.persist_settings();
+        self.persist_window_state_now();
+        cx.notify();
+    }
+
+    pub fn set_auto_jump_mode(&mut self, mode: AutoJumpMode, cx: &mut Context<Self>) {
+        self.settings.smart_detection.auto_jump = mode;
+        self.persist_settings();
+        cx.notify();
+    }
+
+    pub fn set_sensitive_copy_exclude_history(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        self.settings
+            .smart_detection
+            .exclude_sensitive_from_clipboard_history = enabled;
+        self.persist_settings();
+        cx.notify();
+    }
+
+    pub fn set_linux_force_tray(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        self.settings.platform.linux_force_tray_without_sni = enabled;
+        self.persist_settings();
+        cx.notify();
+    }
+
+    pub fn set_macos_dock_policy(&mut self, policy: MacosDockPolicy, cx: &mut Context<Self>) {
+        self.settings.platform.macos_dock_policy = policy;
+        self.persist_settings();
+        let window_open = self.active_window.is_some();
+        set_macos_policy(cx, policy, window_open);
         cx.notify();
     }
 
@@ -600,7 +674,7 @@ impl Workbench {
 
     pub fn enter_warm_standby(&mut self, cx: &mut Context<Self>) {
         self.phase = Phase::WarmStandby;
-        set_macos_policy(cx, false);
+        set_macos_policy(cx, self.settings.platform.macos_dock_policy, false);
         self.sleep_timer = Some(cx.spawn(async move |weak, cx| {
             cx.background_executor().timer(WARM_STANDBY_GRACE).await;
             cx.update(|cx| {
@@ -646,15 +720,29 @@ impl Workbench {
         }));
     }
 
+    /// Idempotent teardown invoked by both [`quit_now`] and OS-initiated
+    /// `cx.on_app_quit` (`Cmd+Q`, `WM_ENDSESSION`) so `WindowState` is persisted
+    /// and IPC -> hotkey -> tray shut down cleanly exactly once.
+    pub fn teardown_for_quit(&mut self) {
+        if self.torn_down {
+            return;
+        }
+        self.torn_down = true;
+        self.sleep_timer = None;
+        self.pending_wake = None;
+        self.persist_window_state_now();
+        self.platform.shutdown();
+    }
+
     /// Ordered quit (ADR-0002): cancel timers, destroy windows, drop tray /
     /// hotkey / IPC, then quit.
     pub fn quit_now(&mut self, cx: &mut Context<Self>) {
         self.sleep_timer = None;
+        self.pending_wake = None;
         if let Some(handle) = self.active_window.take() {
             let _ = handle.update(cx, |_, window, _| window.remove_window());
         }
-        self.persist_window_state_now();
-        self.platform.shutdown();
+        self.teardown_for_quit();
         cx.quit();
     }
 
@@ -687,6 +775,23 @@ impl Workbench {
     }
 }
 
+/// Monotonically increasing per-tool instance number so closing `#2` among
+/// `#1/#2/#3` never produces a duplicate `#3` on the next open.
+pub(crate) fn next_instance_number(counters: &mut HashMap<ToolId, u32>, tool: ToolId) -> u32 {
+    let entry = counters.entry(tool).or_insert(0);
+    *entry = entry.saturating_add(1);
+    *entry
+}
+
+/// Logical display rectangle used to keep restored windows inside visible bounds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DisplayRect {
+    pub x: i32,
+    pub y: i32,
+    pub width: u32,
+    pub height: u32,
+}
+
 /// Clamp recorded geometry to the schema's minimum so a restored window is
 /// never rejected by `WindowState::validate`.
 pub fn clamp_geometry(geometry: WindowGeometry) -> WindowGeometry {
@@ -696,6 +801,47 @@ pub fn clamp_geometry(geometry: WindowGeometry) -> WindowGeometry {
         width: geometry.width.max(320),
         height: geometry.height.max(240),
     }
+}
+
+/// Clamp a window rectangle so it fits within `display` (protecting against
+/// disconnected external monitors leaving the window off-screen).
+pub fn clamp_to_display(geometry: WindowGeometry, display: DisplayRect) -> WindowGeometry {
+    let min_w = 320.min(display.width.max(1));
+    let min_h = 240.min(display.height.max(1));
+    let width = geometry.width.clamp(min_w, display.width.max(min_w));
+    let height = geometry.height.clamp(min_h, display.height.max(min_h));
+    let max_x = display
+        .x
+        .saturating_add(display.width.saturating_sub(width) as i32);
+    let max_y = display
+        .y
+        .saturating_add(display.height.saturating_sub(height) as i32);
+    let x = geometry.x.clamp(display.x, max_x.max(display.x));
+    let y = geometry.y.clamp(display.y, max_y.max(display.y));
+    WindowGeometry {
+        x,
+        y,
+        width,
+        height,
+    }
+}
+
+fn display_rect_from_bounds(bounds: Bounds<Pixels>) -> DisplayRect {
+    DisplayRect {
+        x: f32::from(bounds.origin.x).round() as i32,
+        y: f32::from(bounds.origin.y).round() as i32,
+        width: f32::from(bounds.size.width).max(320.0).round() as u32,
+        height: f32::from(bounds.size.height).max(240.0).round() as u32,
+    }
+}
+
+fn rect_contains_center(rect: DisplayRect, geometry: WindowGeometry) -> bool {
+    let cx = geometry.x.saturating_add((geometry.width / 2) as i32);
+    let cy = geometry.y.saturating_add((geometry.height / 2) as i32);
+    cx >= rect.x
+        && cx < rect.x.saturating_add(rect.width as i32)
+        && cy >= rect.y
+        && cy < rect.y.saturating_add(rect.height as i32)
 }
 
 /// Convert a GPUI window-bounds rectangle into persisted logical geometry.
@@ -709,15 +855,61 @@ pub fn geometry_from_bounds(bounds: WindowBounds) -> WindowGeometry {
     })
 }
 
-/// Rebuild `WindowBounds` from restored state, defaulting to a centered window.
-pub fn window_bounds_from_state(state: &WindowState, cx: &App) -> WindowBounds {
-    let Some(geometry) = state.geometry else {
+/// Rebuild `WindowBounds` from restored state, honoring [`WakePlacement`] and
+/// clamping against visible display bounds so disconnected monitors never hide
+/// the window off-screen.
+pub fn window_bounds_from_state(
+    state: &WindowState,
+    placement: WakePlacement,
+    cx: &App,
+) -> WindowBounds {
+    let Some(raw_geometry) = state.geometry else {
         return WindowBounds::centered(None, size(px(1100.0), px(720.0)), cx);
     };
-    let geometry = clamp_geometry(geometry);
+    let clamped_min = clamp_geometry(raw_geometry);
+
+    let displays: Vec<DisplayRect> = cx
+        .displays()
+        .into_iter()
+        .map(|d| display_rect_from_bounds(d.visible_bounds()))
+        .collect();
+    let primary = cx
+        .primary_display()
+        .map(|d| display_rect_from_bounds(d.visible_bounds()))
+        .or_else(|| displays.first().copied());
+
+    let resolved = match placement {
+        WakePlacement::FollowCursorScreen => {
+            if let Some(target) = primary {
+                let sized = clamp_to_display(clamped_min, target);
+                let centered_x = target.x + ((target.width.saturating_sub(sized.width)) / 2) as i32;
+                let centered_y =
+                    target.y + ((target.height.saturating_sub(sized.height)) / 2) as i32;
+                WindowGeometry {
+                    x: centered_x,
+                    y: centered_y,
+                    ..sized
+                }
+            } else {
+                clamped_min
+            }
+        }
+        WakePlacement::RememberLastPosition => {
+            let matching = displays
+                .iter()
+                .copied()
+                .find(|rect| rect_contains_center(*rect, clamped_min))
+                .or(primary);
+            match matching {
+                Some(rect) => clamp_to_display(clamped_min, rect),
+                None => clamped_min,
+            }
+        }
+    };
+
     let bounds = Bounds {
-        origin: point(px(geometry.x as f32), px(geometry.y as f32)),
-        size: size(px(geometry.width as f32), px(geometry.height as f32)),
+        origin: point(px(resolved.x as f32), px(resolved.y as f32)),
+        size: size(px(resolved.width as f32), px(resolved.height as f32)),
     };
     if state.maximized {
         WindowBounds::Maximized(bounds)
@@ -730,8 +922,10 @@ pub fn window_bounds_from_state(state: &WindowState, cx: &App) -> WindowBounds {
 mod tests {
     // NOTE: no `use super::*` here — `gpui_kit::*` also exports GPUI's `test`
     // macro, which would shadow the builtin `#[test]` attribute.
-    use super::{Recents, clamp_geometry};
-    use devtools_core::{ToolId, WindowGeometry, WindowState};
+    use std::collections::HashMap;
+
+    use super::{DisplayRect, Recents, clamp_geometry, clamp_to_display, next_instance_number};
+    use devtools_core::{AppSettings, ToolId, WindowGeometry, WindowState};
 
     #[test]
     fn recents_are_unique_newest_first_and_capped() {
@@ -772,5 +966,59 @@ mod tests {
             .validate()
             .is_ok()
         );
+    }
+
+    #[test]
+    fn display_clamp_rescues_offscreen_external_monitor_geometry() {
+        let primary = DisplayRect {
+            x: 0,
+            y: 0,
+            width: 1920,
+            height: 1040,
+        };
+        let offscreen = WindowGeometry {
+            x: 3200,
+            y: -500,
+            width: 2400,
+            height: 1500,
+        };
+        let clamped = clamp_to_display(offscreen, primary);
+        assert_eq!(clamped.width, 1920);
+        assert_eq!(clamped.height, 1040);
+        assert_eq!(clamped.x, 0);
+        assert_eq!(clamped.y, 0);
+    }
+
+    #[test]
+    fn monotonic_instance_numbers_never_duplicate_after_middle_close() {
+        let mut counters = HashMap::new();
+        assert_eq!(
+            next_instance_number(&mut counters, ToolId::JsonFormatter),
+            1
+        );
+        assert_eq!(
+            next_instance_number(&mut counters, ToolId::JsonFormatter),
+            2
+        );
+        assert_eq!(
+            next_instance_number(&mut counters, ToolId::JsonFormatter),
+            3
+        );
+        // Even after #2 is closed, the next opened instance gets #4, never a duplicate #3.
+        assert_eq!(
+            next_instance_number(&mut counters, ToolId::JsonFormatter),
+            4
+        );
+        // Distinct tools track their own independent counters.
+        assert_eq!(next_instance_number(&mut counters, ToolId::JwtTool), 1);
+    }
+
+    #[test]
+    fn settings_serialization_never_contains_autostart_or_recents_payload() {
+        let settings = AppSettings::default();
+        let raw = toml::to_string(&settings).expect("serialize settings");
+        let parsed: toml::Value = toml::from_str(&raw).expect("parse toml");
+        assert!(parsed.get("auto_launch").is_none());
+        assert!(parsed.get("recents").is_none());
     }
 }
