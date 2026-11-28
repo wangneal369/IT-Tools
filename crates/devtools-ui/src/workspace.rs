@@ -111,6 +111,7 @@ impl Phase {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HomeView {
     Overview,
+    Favorites,
     Category(Category),
 }
 
@@ -378,6 +379,14 @@ impl Workbench {
         self.home_view = HomeView::Category(category);
         self.active = 0;
         self.status_line = format!("分类：{}", crate::labels::category_label(category));
+        cx.notify();
+    }
+
+    pub fn open_favorites(&mut self, cx: &mut Context<Self>) {
+        self.home_view = HomeView::Favorites;
+        self.active = 0;
+        let count = self.settings.navigation.favorites.len();
+        self.status_line = format!("收藏工具（{count} 个）");
         cx.notify();
     }
 

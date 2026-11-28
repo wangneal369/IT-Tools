@@ -354,20 +354,24 @@ fn render_rail(
     }
     {
         let wb = workbench.clone();
+        let favorites_active = on_home_tab && matches!(home_view, HomeView::Favorites);
         rail = rail.child(nav_item(
             palette,
             "rail-favorites",
-            IconName::Star,
+            if favorites_active {
+                IconName::StarFill
+            } else {
+                IconName::Star
+            },
             "收藏工具",
             Some(favorites_len.to_string()),
             false,
             collapsed,
-            false,
+            favorites_active,
             move |cx| {
                 wb.update(cx, |state, cx| {
-                    state.show_home(cx);
+                    state.open_favorites(cx);
                     state.close_flyout(cx);
-                    state.set_status("收藏工具展示在工作台首页顶部", cx);
                 });
             },
         ));
@@ -908,6 +912,36 @@ fn render_home(
             .truncate()
             .child("工作台首页")
             .into_any_element(),
+        HomeView::Favorites => {
+            let wb = workbench.clone();
+            div()
+                .flex()
+                .items_center()
+                .gap_1p5()
+                .min_w_0()
+                .child(
+                    div()
+                        .id("home-breadcrumb-root")
+                        .text_sm()
+                        .text_color(rgb(palette.muted))
+                        .cursor_pointer()
+                        .hover(move |s| s.text_color(rgb(palette.accent)))
+                        .child("工作台首页")
+                        .on_click(move |_, _, cx| {
+                            wb.update(cx, |s, cx| s.show_home(cx));
+                        }),
+                )
+                .child(icon_el(IconName::ChevronRight, 13.0, palette.subtle))
+                .child(icon_el(IconName::StarFill, 15.0, palette.accent))
+                .child(
+                    div()
+                        .text_base()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .truncate()
+                        .child("收藏工具"),
+                )
+                .into_any_element()
+        }
         HomeView::Category(category) => {
             let wb = workbench.clone();
             div()
@@ -940,6 +974,13 @@ fn render_home(
         }
     };
 
+    let subtitle = match home_view {
+        HomeView::Favorites => "已收藏的常用工具 · 点击卡片右上角星标可随时取消收藏",
+        HomeView::Overview | HomeView::Category(_) => {
+            "28 个纯离线开发工具 · 支持获焦智能识别与单跳接力 · 零数据落盘"
+        }
+    };
+
     let wb_paste = workbench.clone();
     page = page.child(
         div()
@@ -960,7 +1001,7 @@ fn render_home(
                             .text_xs()
                             .text_color(rgb(palette.muted))
                             .truncate()
-                            .child("28 个纯离线开发工具 · 支持获焦智能识别与单跳接力 · 零数据落盘"),
+                            .child(subtitle),
                     ),
             )
             .child(
@@ -1009,35 +1050,133 @@ fn render_home(
             ),
     );
 
-    if !favorites.is_empty() {
-        page = page.child(chip_section(
-            workbench,
-            palette,
-            IconName::StarFill,
-            "收藏工具",
-            favorites,
-        ));
-    }
-
-    if show_recents && !recents.is_empty() {
-        page = page.child(chip_section(
-            workbench,
-            palette,
-            IconName::Clock,
-            "最近使用（仅驻内存）",
-            recents,
-        ));
-    }
-
-    if let HomeView::Category(category) = home_view {
-        page = page.child(tool_grid(workbench, palette, category, cols, cx));
-    } else {
-        for category in Category::ALL {
+    match home_view {
+        HomeView::Favorites => {
+            if favorites.is_empty() {
+                page = page.child(render_empty_favorites(workbench, palette));
+            } else {
+                page = page.child(tool_grid_section(
+                    workbench,
+                    palette,
+                    IconName::StarFill,
+                    "已收藏的工具",
+                    &favorites,
+                    cols,
+                    cx,
+                ));
+            }
+        }
+        HomeView::Category(category) => {
+            if !favorites.is_empty() {
+                page = page.child(chip_section(
+                    workbench,
+                    palette,
+                    IconName::StarFill,
+                    "收藏工具",
+                    favorites,
+                ));
+            }
+            if show_recents && !recents.is_empty() {
+                page = page.child(chip_section(
+                    workbench,
+                    palette,
+                    IconName::Clock,
+                    "最近使用（仅驻内存）",
+                    recents,
+                ));
+            }
             page = page.child(tool_grid(workbench, palette, category, cols, cx));
+        }
+        HomeView::Overview => {
+            if !favorites.is_empty() {
+                page = page.child(chip_section(
+                    workbench,
+                    palette,
+                    IconName::StarFill,
+                    "收藏工具",
+                    favorites,
+                ));
+            }
+            if show_recents && !recents.is_empty() {
+                page = page.child(chip_section(
+                    workbench,
+                    palette,
+                    IconName::Clock,
+                    "最近使用（仅驻内存）",
+                    recents,
+                ));
+            }
+            for category in Category::ALL {
+                page = page.child(tool_grid(workbench, palette, category, cols, cx));
+            }
         }
     }
 
     page.into_any_element()
+}
+
+fn render_empty_favorites(workbench: &Entity<Workbench>, palette: Palette) -> AnyElement {
+    let wb = workbench.clone();
+    div()
+        .w_full()
+        .py_12()
+        .px_6()
+        .rounded_lg()
+        .bg(rgb(palette.panel))
+        .border_1()
+        .border_color(rgb(palette.border))
+        .flex()
+        .flex_col()
+        .items_center()
+        .justify_center()
+        .gap_3()
+        .child(
+            div()
+                .w(px(40.0))
+                .h(px(40.0))
+                .rounded_lg()
+                .bg(rgb(palette.accent_soft))
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(icon_el(IconName::Star, 20.0, palette.accent)),
+        )
+        .child(
+            div()
+                .text_sm()
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(rgb(palette.text))
+                .child("还没有收藏任何工具"),
+        )
+        .child(
+            div()
+                .text_xs()
+                .text_color(rgb(palette.muted))
+                .child("在工具卡片或工具页右上角点击星标，即可固定到这里快速打开"),
+        )
+        .child(
+            div()
+                .id("favorites-browse-all")
+                .mt_1()
+                .h(px(30.0))
+                .px_3()
+                .rounded_md()
+                .cursor_pointer()
+                .bg(rgb(palette.accent))
+                .hover(move |s| s.bg(rgb(palette.accent_hover)))
+                .flex()
+                .items_center()
+                .gap_1p5()
+                .text_xs()
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(rgb(0xffffff))
+                .child(icon_el(IconName::House, 13.0, 0xffffff))
+                .child("浏览全部工具")
+                .on_click(move |_, _, cx| {
+                    wb.update(cx, |state, cx| state.show_home(cx));
+                }),
+        )
+        .into_any_element()
 }
 
 fn chip_section(
@@ -1103,6 +1242,26 @@ fn tool_grid(
     cx: &App,
 ) -> AnyElement {
     let tools: Vec<ToolId> = tools_in(category).collect();
+    tool_grid_section(
+        workbench,
+        palette,
+        category_icon(category),
+        category_label(category),
+        &tools,
+        cols,
+        cx,
+    )
+}
+
+fn tool_grid_section(
+    workbench: &Entity<Workbench>,
+    palette: Palette,
+    icon: IconName,
+    title: &str,
+    tools: &[ToolId],
+    cols: usize,
+    cx: &App,
+) -> AnyElement {
     let mut grid = div().flex().flex_col().gap_2p5();
 
     for chunk in tools.chunks(cols.max(1)) {
@@ -1131,13 +1290,13 @@ fn tool_grid(
                         .flex()
                         .items_center()
                         .gap_1p5()
-                        .child(icon_el(category_icon(category), 14.0, palette.accent))
+                        .child(icon_el(icon, 14.0, palette.accent))
                         .child(
                             div()
                                 .text_xs()
                                 .font_weight(FontWeight::SEMIBOLD)
                                 .text_color(rgb(palette.text))
-                                .child(category_label(category)),
+                                .child(title.to_owned()),
                         ),
                 )
                 .child(
