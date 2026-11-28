@@ -99,30 +99,28 @@ pub fn build(sender: Sender<PlatformCommand>) -> Result<TrayHandle, TrayError> {
     Ok(TrayHandle { tray: Some(tray) })
 }
 
-/// A 32×32 in-memory icon (accent frame + `{}` glyph), avoiding any image
-/// decoding dependency and any asset lookup at runtime.
+const TRAY_ICON_SIZE: u32 = 64;
+const TRAY_ICON_RGBA: &[u8] = include_bytes!("../../../assets/icons/tray-64.rgba");
+
+/// Embedded 64×64 pre-rendered RGBA app icon (`assets/icons/devtools.svg`),
+/// keeping crisp HiDPI rendering without any runtime image decoder dependency.
 fn devtools_icon() -> Result<Icon, TrayError> {
-    const SIZE: u32 = 32;
-    let mut rgba = vec![0u8; (SIZE * SIZE * 4) as usize];
-    for y in 0..SIZE {
-        for x in 0..SIZE {
-            let index = ((y * SIZE + x) * 4) as usize;
-            let frame = !(3..SIZE - 3).contains(&x) || !(3..SIZE - 3).contains(&y);
-            let left_brace = (9..=12).contains(&x) && (9..=22).contains(&y) && x + y >= 20;
-            let right_brace = (19..=22).contains(&x) && (9..=22).contains(&y) && x + y <= 43;
-            let glyph = left_brace || right_brace;
-            let (r, g, b) = if glyph {
-                (245, 247, 250)
-            } else if frame {
-                (94, 158, 255)
-            } else {
-                (26, 29, 36)
-            };
-            rgba[index] = r;
-            rgba[index + 1] = g;
-            rgba[index + 2] = b;
-            rgba[index + 3] = 255;
-        }
+    Icon::from_rgba(TRAY_ICON_RGBA.to_vec(), TRAY_ICON_SIZE, TRAY_ICON_SIZE)
+        .map_err(|err| TrayError::Icon(err.to_string()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{TRAY_ICON_RGBA, TRAY_ICON_SIZE};
+
+    #[test]
+    fn embedded_tray_icon_has_expected_rgba_dimensions_and_alpha() {
+        let expected_len = (TRAY_ICON_SIZE * TRAY_ICON_SIZE * 4) as usize;
+        assert_eq!(TRAY_ICON_RGBA.len(), expected_len);
+        // Rounded squircle corners must stay transparent.
+        assert_eq!(TRAY_ICON_RGBA[3], 0);
+        // Center pixel must be opaque.
+        let center = (((TRAY_ICON_SIZE / 2) * TRAY_ICON_SIZE + (TRAY_ICON_SIZE / 2)) * 4) as usize;
+        assert_eq!(TRAY_ICON_RGBA[center + 3], 255);
     }
-    Icon::from_rgba(rgba, SIZE, SIZE).map_err(|err| TrayError::Icon(err.to_string()))
 }

@@ -5,12 +5,23 @@
 //! vector icons across the shell and all 28 tools.
 
 use std::borrow::Cow;
+use std::sync::{Arc, OnceLock};
 
 use devtools_core::{Category, ToolId};
 pub use gpui_kit::assets::IconName;
 use gpui_kit::assets::{Assets, icon_assets};
 use gpui_kit::component::{Icon, Sizable, Size};
 use gpui_kit::*;
+
+const BRAND_ICON_PNG: &[u8] = include_bytes!("../../../assets/icons/devtools-64.png");
+
+/// Cached full-color DevTools brand icon (64×64 PNG) for the sidebar mark.
+pub fn brand_icon_image() -> Arc<Image> {
+    static IMAGE: OnceLock<Arc<Image>> = OnceLock::new();
+    IMAGE
+        .get_or_init(|| Arc::new(Image::from_bytes(ImageFormat::Png, BRAND_ICON_PNG.to_vec())))
+        .clone()
+}
 
 icon_assets!(
     SelectedIcons,

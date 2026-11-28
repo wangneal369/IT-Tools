@@ -78,6 +78,12 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $bin = 'target/release/devtools.exe'
+          $peBytes = [System.IO.File]::ReadAllBytes((Resolve-Path $bin).Path)
+          $peOffset = [BitConverter]::ToInt32($peBytes, 0x3C)
+          $subsystem = [BitConverter]::ToUInt16($peBytes, $peOffset + 24 + 68)
+          if ($subsystem -ne 2) {
+            throw "Expected IMAGE_SUBSYSTEM_WINDOWS_GUI (2), got PE subsystem $subsystem"
+          }
           $size = (Get-Item $bin).Length
           if ($size -gt [long]$env:MAX_BINARY_BYTES) {
             throw "Binary size $size exceeds $env:MAX_BINARY_BYTES bytes"
@@ -105,6 +111,7 @@ jobs:
           APP="dist/DevTools.app"
           mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
           cp target/release/devtools "$APP/Contents/MacOS/devtools"
+          cp assets/icons/devtools.icns "$APP/Contents/Resources/devtools.icns"
           cat > "$APP/Contents/Info.plist" <<'PLIST'
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -114,6 +121,7 @@ jobs:
             <key>CFBundleName</key><string>DevTools</string>
             <key>CFBundleDisplayName</key><string>DevTools</string>
             <key>CFBundleExecutable</key><string>devtools</string>
+            <key>CFBundleIconFile</key><string>devtools.icns</string>
             <key>CFBundlePackageType</key><string>APPL</string>
             <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
             <key>CFBundleShortVersionString</key><string>__APP_VERSION__</string>
@@ -173,14 +181,7 @@ jobs:
           Categories=Development;Utility;
           StartupNotify=false
           DESKTOP
-          cat > "$ROOT/io.github.wangneal369.devtools.svg" <<'SVG'
-          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
-            <rect width="64" height="64" rx="12" fill="#1f2328"/>
-            <path d="M20 22l-8 10 8 10M44 22l8 10-8 10M37 16l-10 32"
-                  fill="none" stroke="#e6edf3" stroke-width="5"
-                  stroke-linecap="round" stroke-linejoin="round"/>
-          </svg>
-          SVG
+          cp assets/icons/devtools.svg "$ROOT/io.github.wangneal369.devtools.svg"
           cat > "$ROOT/install.sh" <<'INSTALL'
           #!/usr/bin/env sh
           # 安装到 ~/.local：二进制、桌面项与图标。

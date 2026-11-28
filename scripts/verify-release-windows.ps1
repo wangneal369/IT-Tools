@@ -1,4 +1,4 @@
-#Requires -Version 7.0
+﻿#Requires -Version 7.0
 <#
 .SYNOPSIS
   Windows Release + thin LTO 本机验证：serde_json_path 验活、构建、体积红线与冒烟。
@@ -115,6 +115,49 @@ try {
     if (-not (Test-Path -LiteralPath $exe)) {
         throw "未找到 Release 二进制：$exe"
     }
+
+    Write-Step "校验 Windows GUI 子系统与嵌入式应用图标"
+    $peBytes = [System.IO.File]::ReadAllBytes($exe)
+    $peOffset = [BitConverter]::ToInt32($peBytes, 0x3C)
+    $subsystem = [BitConverter]::ToUInt16($peBytes, $peOffset + 24 + 68)
+    if ($subsystem -ne 2) {
+        throw "devtools.exe PE Subsystem 应为 2 (IMAGE_SUBSYSTEM_WINDOWS_GUI)，实际为 $subsystem"
+    }
+    Write-Host "  PE Subsystem = 2 (IMAGE_SUBSYSTEM_WINDOWS_GUI) OK"
+
+    if (-not ('DevToolsIconCheck' -as [type])) {
+        Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+public static class DevToolsIconCheck {
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    public static extern IntPtr LoadLibraryExW(string lpLibFileName, IntPtr hFile, uint dwFlags);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    public static extern bool FreeLibrary(IntPtr hLibModule);
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern IntPtr LoadImageW(IntPtr hInst, IntPtr name, uint type, int cx, int cy, uint fuLoad);
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern bool DestroyIcon(IntPtr hIcon);
+}
+"@
+    }
+    $hMod = [DevToolsIconCheck]::LoadLibraryExW($exe, [IntPtr]::Zero, 0x00000002)
+    if ($hMod -eq [IntPtr]::Zero) {
+        throw "无法以数据文件方式加载 $exe"
+    }
+    try {
+        # 验证资源 ID = 1 的 RT_GROUP_ICON（与 gpui-pre-windows LoadImageW 一致）
+        $hIcon = [DevToolsIconCheck]::LoadImageW($hMod, [IntPtr]1, 1, 0, 0, 0x00000040)
+        if ($hIcon -eq [IntPtr]::Zero) {
+            throw "devtools.exe 缺少嵌入式应用图标资源 (RT_GROUP_ICON ID = 1)"
+        }
+        [void][DevToolsIconCheck]::DestroyIcon($hIcon)
+        Write-Host "  Embedded Icon (RT_GROUP_ICON #1) OK"
+    }
+    finally {
+        [void][DevToolsIconCheck]::FreeLibrary($hMod)
+    }
+
     $exeBytes = (Get-Item -LiteralPath $exe).Length
 
     Write-Step "测量未压缩二进制"
@@ -131,15 +174,21 @@ try {
 
     if (-not $SkipSmokeTest) {
         Write-Step "冒烟：--help"
-        $help = & $exe --help 2>&1
-        if ($LASTEXITCODE -ne 0) {
-            throw "--help 退出码 $LASTEXITCODE"
+        $helpOut = [System.IO.Path]::GetTempFileName()
+        try {
+            $helpProc = Start-Process -FilePath $exe -ArgumentList '--help' -RedirectStandardOutput $helpOut -Wait -PassThru
+            if ($helpProc.ExitCode -ne 0) {
+                throw "--help 退出码 $($helpProc.ExitCode)"
+            }
+            $helpText = Get-Content -LiteralPath $helpOut -Raw -Encoding utf8
+            if ($helpText -notmatch 'DevTools') {
+                throw "--help 输出未包含 DevTools 用法说明"
+            }
+            Write-Host "  --help OK"
         }
-        $helpText = ($help | Out-String)
-        if ($helpText -notmatch 'DevTools') {
-            throw "--help 输出未包含 DevTools 用法说明"
+        finally {
+            Remove-Item -LiteralPath $helpOut -Force -ErrorAction SilentlyContinue
         }
-        Write-Host "  --help OK"
 
         Write-Step "冒烟：--silent 常驻 -> --quit-running 有序退出"
         $proc = Start-Process -FilePath $exe -ArgumentList '--silent' -PassThru
@@ -150,9 +199,9 @@ try {
             if ($proc.HasExited) {
                 throw "--silent 进程提前退出：请确认没有已运行的 DevTools 实例（本脚本需要独占验证）。"
             }
-            & $exe --quit-running
-            if ($LASTEXITCODE -ne 0) {
-                throw "--quit-running 退出码 $LASTEXITCODE"
+            $quitProc = Start-Process -FilePath $exe -ArgumentList '--quit-running' -Wait -PassThru
+            if ($quitProc.ExitCode -ne 0) {
+                throw "--quit-running 退出码 $($quitProc.ExitCode)"
             }
             if (-not $proc.WaitForExit(30000)) {
                 throw "--silent 实例未在 30s 内响应 --quit-running"

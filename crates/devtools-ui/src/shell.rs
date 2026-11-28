@@ -299,16 +299,11 @@ fn render_rail(
                 });
             })
             .child(
-                div()
-                    .w(px(22.0))
-                    .h(px(22.0))
+                img(crate::icons::brand_icon_image())
+                    .w(px(24.0))
+                    .h(px(24.0))
                     .flex_shrink_0()
-                    .rounded_md()
-                    .bg(rgb(palette.accent))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .child(icon_el(IconName::SquareTerminal, 13.0, 0xffffff)),
+                    .rounded_md(),
             );
 
         if !collapsed {
