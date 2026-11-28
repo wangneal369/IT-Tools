@@ -1,3 +1,5 @@
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 //! DevTools 桌面入口（薄，ADR-0004）。
 //!
 //! Responsibilities, in order:
@@ -47,8 +49,13 @@ impl Request {
 fn main() {
     let request = match parse_args() {
         Ok(Some(request)) => request,
-        Ok(None) => return,
+        Ok(None) => {
+            attach_parent_console_if_needed();
+            println!("{USAGE}");
+            return;
+        }
         Err(message) => {
+            attach_parent_console_if_needed();
             eprintln!("{message}");
             std::process::exit(2);
         }
@@ -71,11 +78,13 @@ fn main() {
                 return;
             }
             if let Err(err) = ipc::send(&ipc_name, request.ipc_command()) {
+                attach_parent_console_if_needed();
                 eprintln!("[devtools] 无法转发命令到已运行实例：{err}");
             }
             return;
         }
         Err(err) => {
+            attach_parent_console_if_needed();
             eprintln!("[devtools] 单实例 IPC 初始化失败：{err}");
             std::process::exit(1);
         }
@@ -107,7 +116,7 @@ fn main() {
     });
 }
 
-/// Returns `Ok(None)` when help was printed.
+/// Returns `Ok(None)` when help should be printed.
 fn parse_args() -> Result<Option<Request>, String> {
     parse_args_from(std::env::args().skip(1))
 }
@@ -125,15 +134,60 @@ where
             "--show" => request = Request::ShowExplicit,
             "--settings" => request = Request::Settings,
             "--quit-running" => request = Request::QuitRunning,
-            "-h" | "--help" => {
-                println!("{USAGE}");
-                return Ok(None);
-            }
+            "-h" | "--help" => return Ok(None),
             other => return Err(format!("未知参数 `{other}`\n\n{USAGE}")),
         }
     }
     Ok(Some(request))
 }
+
+/// On Windows release builds (`windows_subsystem = "windows"`), re-attach to
+/// the parent shell's console only right before short-lived CLI output/errors
+/// when stdout/stderr are not already redirected. Never allocates a new window
+/// and never attaches a long-running GUI / `--silent` process to a terminal.
+#[cfg(all(target_os = "windows", not(debug_assertions)))]
+fn attach_parent_console_if_needed() {
+    const ATTACH_PARENT_PROCESS: u32 = u32::MAX;
+    const STD_OUTPUT_HANDLE: u32 = (-11i32) as u32;
+    const STD_ERROR_HANDLE: u32 = (-12i32) as u32;
+    const INVALID_HANDLE_VALUE: isize = -1;
+    const FILE_TYPE_UNKNOWN: u32 = 0;
+
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn AttachConsole(dw_process_id: u32) -> i32;
+        fn GetStdHandle(n_std_handle: u32) -> isize;
+        fn SetStdHandle(n_std_handle: u32, h_handle: isize) -> i32;
+        fn GetFileType(h_file: isize) -> u32;
+    }
+
+    fn is_valid_std_handle(handle: isize) -> bool {
+        handle != 0
+            && handle != INVALID_HANDLE_VALUE
+            && unsafe { GetFileType(handle) != FILE_TYPE_UNKNOWN }
+    }
+
+    unsafe {
+        let orig_out = GetStdHandle(STD_OUTPUT_HANDLE);
+        let orig_err = GetStdHandle(STD_ERROR_HANDLE);
+        let out_valid = is_valid_std_handle(orig_out);
+        let err_valid = is_valid_std_handle(orig_err);
+        if out_valid && err_valid {
+            return;
+        }
+        if AttachConsole(ATTACH_PARENT_PROCESS) != 0 {
+            if out_valid {
+                SetStdHandle(STD_OUTPUT_HANDLE, orig_out);
+            }
+            if err_valid {
+                SetStdHandle(STD_ERROR_HANDLE, orig_err);
+            }
+        }
+    }
+}
+
+#[cfg(not(all(target_os = "windows", not(debug_assertions))))]
+fn attach_parent_console_if_needed() {}
 
 const USAGE: &str = "\
 DevTools — 离线开发效率工具集
